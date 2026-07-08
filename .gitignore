@@ -1,0 +1,21 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+
+# Frontend
+node_modules/
+dist/
+frontend/test-results/
+frontend/playwright-report/
+
+# Runtime data and local configuration
+data/*.db
+.env
+.env.local
+frontend/.env
+frontend/.env.local
+
+# OS and editor files
+.DS_Store
+*.swp
