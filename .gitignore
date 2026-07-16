@@ -11,6 +11,8 @@ frontend/playwright-report/
 
 # Runtime data and local configuration
 data/*.db
+.run/
+logs/
 .env
 .env.local
 frontend/.env

@@ -29,6 +29,34 @@ npm install
 cp .env.example .env
 ```
 
+## Quick start
+
+Launch the complete app in the background from the repository root:
+
+```sh
+./scripts/start.sh
+```
+
+The script starts Ollama only when its local service is unavailable, then starts
+the backend and frontend. It prints [http://localhost:5173](http://localhost:5173)
+after both servers are ready and returns control to the terminal. Running it
+again stops and replaces only the backend and frontend previously started by
+the script; it never stops Ollama. It refuses to replace an untracked process
+already serving port 8000 or 5173. Runtime PID files are written under `.run/`,
+with service output under `logs/`.
+
+Reset all stored articles and onboarding preferences, then relaunch and trigger
+an immediate pipeline refresh:
+
+```sh
+./scripts/reset-feed.sh
+```
+
+This is a destructive full-feed reset: every article is deleted and current
+category selections are cleared before the app restarts at onboarding.
+
+Use the manual commands below when active development requires backend reloads.
+
 ## Run locally
 
 The app uses three local processes. Keep each command running in its own
