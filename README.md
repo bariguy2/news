@@ -1,5 +1,9 @@
 # Local News Aggregator
 
+> ⚠️ **Work in progress.** This is an early, single-user prototype under active
+> development. Features, schema, and APIs may change, and it is not intended for
+> production use.
+
 A single-user news briefing that runs on your Mac. It collects a curated set of
 RSS feeds, extracts article text, creates local FACTS and IMPACT summaries with
 Ollama, and serves a category-filtered React interface.
