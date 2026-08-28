@@ -2,7 +2,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from app.config import MODEL_NAME
+from app.config import MODEL_NAME, SUMMARY_MAX_TOKENS
 from app.summarize.ollama_client import parse_summary, summarize_text
 from app.summarize.prompt import FACTS_MARKER, IMPACT_MARKER, RETRY_REMINDER
 
@@ -55,7 +55,10 @@ class OllamaClientTests(unittest.TestCase):
         chat_mock.assert_called_once()
         kwargs = chat_mock.call_args.kwargs
         self.assertEqual(MODEL_NAME, kwargs["model"])
-        self.assertEqual({"temperature": 0.3}, kwargs["options"])
+        self.assertEqual(
+            {"temperature": 0.3, "num_predict": SUMMARY_MAX_TOKENS},
+            kwargs["options"],
+        )
         self.assertEqual("user", kwargs["messages"][0]["role"])
         self.assertIn("Article body", kwargs["messages"][0]["content"])
 

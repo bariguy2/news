@@ -90,9 +90,12 @@ Open [http://localhost:5173](http://localhost:5173). The frontend reads
 `VITE_API_BASE=http://localhost:8000` from `frontend/.env`.
 
 The scheduler runs immediately when the backend starts and then every 30
-minutes. The initial batch can take several minutes or longer because every
-article is extracted and summarized locally with an 8B model. A manual refresh
-can be queued with:
+minutes. Before onboarding it has no selected categories and does no feed work.
+Saving preferences triggers an immediate refresh that ingests only the selected
+categories and only stories from the latest 48 hours. Up to three recent
+articles are extracted and summarized concurrently with the local 8B model,
+newest first. The feed polls while this work runs, so completed summaries appear
+without a browser reload. A manual refresh can also be queued with:
 
 ```sh
 curl -X POST http://localhost:8000/api/refresh
@@ -127,4 +130,5 @@ npm run test:e2e
 ```
 
 If Chrome is installed elsewhere, set `PLAYWRIGHT_CHROME_PATH` to its executable
-before running the browser test.
+before running the browser test. When ports 8000 or 5173 are already occupied,
+set `NEWS_E2E_BACKEND_PORT` and `NEWS_E2E_FRONTEND_PORT` to unused ports.

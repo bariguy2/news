@@ -4,6 +4,10 @@ import { getArticles, getPreferences } from '../api.js'
 import { formatRelativeTime } from '../time.js'
 
 
+export const EMPTY_FEED_POLL_MS = 5_000
+export const POPULATED_FEED_POLL_MS = 15_000
+
+
 function Feed() {
   const [articles, setArticles] = useState([])
   const [categories, setCategories] = useState([])
@@ -13,27 +17,57 @@ function Feed() {
 
   useEffect(() => {
     let active = true
+    let pollTimer = null
+    let hasArticles = false
     setLoading(true)
     setError('')
 
-    getPreferences()
-      .then((preferences) => {
-        if (!active) return null
+    function schedulePoll(selectedCategories) {
+      const delay = hasArticles ? POPULATED_FEED_POLL_MS : EMPTY_FEED_POLL_MS
+      pollTimer = window.setTimeout(
+        () => loadArticles(selectedCategories, false),
+        delay,
+      )
+    }
+
+    async function loadArticles(selectedCategories, initialLoad) {
+      try {
+        const result = await getArticles(selectedCategories)
+        if (!active) return
+        hasArticles = result.length > 0
+        setArticles(result)
+        setError('')
+      } catch {
+        if (active && initialLoad) {
+          setError('Your briefing could not be loaded.')
+        }
+      } finally {
+        if (active) {
+          if (initialLoad) setLoading(false)
+          schedulePoll(selectedCategories)
+        }
+      }
+    }
+
+    async function loadFeed() {
+      try {
+        const preferences = await getPreferences()
+        if (!active) return
         setCategories(preferences.selected_categories)
-        return getArticles(preferences.selected_categories)
-      })
-      .then((result) => {
-        if (active && result) setArticles(result)
-      })
-      .catch(() => {
-        if (active) setError('Your briefing could not be loaded.')
-      })
-      .finally(() => {
-        if (active) setLoading(false)
-      })
+        await loadArticles(preferences.selected_categories, true)
+      } catch {
+        if (active) {
+          setError('Your briefing could not be loaded.')
+          setLoading(false)
+        }
+      }
+    }
+
+    loadFeed()
 
     return () => {
       active = false
+      if (pollTimer !== null) window.clearTimeout(pollTimer)
     }
   }, [reloadKey])
 

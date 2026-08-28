@@ -190,16 +190,18 @@ class ApiTests(unittest.TestCase):
             {"selected_categories": [], "onboarded": False}, initial.json()
         )
 
-        updated = self.client.post(
-            "/api/preferences",
-            json={"selected_categories": ["Tech", "Science"]},
-        )
+        with patch("app.routes.preferences.run_pipeline") as pipeline_mock:
+            updated = self.client.post(
+                "/api/preferences",
+                json={"selected_categories": ["Tech", "Science"]},
+            )
 
         self.assertEqual(200, updated.status_code)
         self.assertEqual(
             {"selected_categories": ["Tech", "Science"], "onboarded": True},
             updated.json(),
         )
+        pipeline_mock.assert_called_once_with()
         self.assertEqual(updated.json(), self.client.get("/api/preferences").json())
 
         with db.get_conn() as conn:

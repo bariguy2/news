@@ -139,7 +139,7 @@ refuse_untracked_server "http://localhost:5173" "Frontend" "5173"
 
 if ! url_is_ready "http://localhost:11434"; then
     printf 'Starting Ollama...\n'
-    nohup ollama serve >"$OLLAMA_LOG" 2>&1 &
+    OLLAMA_NUM_PARALLEL="${OLLAMA_NUM_PARALLEL:-3}" nohup ollama serve >"$OLLAMA_LOG" 2>&1 &
     if ! wait_for_url "http://localhost:11434" "$OLLAMA_WAIT_ATTEMPTS"; then
         show_startup_failure "Ollama" "$OLLAMA_LOG"
     fi

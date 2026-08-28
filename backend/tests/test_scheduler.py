@@ -1,13 +1,18 @@
+import json
 import tempfile
 import unittest
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from threading import Barrier, Event, Lock, Thread, current_thread
+from unittest.mock import ANY, MagicMock, patch
 
 import app.scheduler as scheduler_module
 from app import db
 from app.config import REFRESH_INTERVAL_MINUTES
 from app.scheduler import PIPELINE_JOB_ID, create_scheduler, run_pipeline
+
+
+NOW = datetime(2026, 8, 27, 12, 0, tzinfo=UTC)
 
 
 class PipelineTests(unittest.TestCase):
@@ -16,47 +21,72 @@ class PipelineTests(unittest.TestCase):
         self.db_path = Path(self.temp_dir.name) / "news.db"
         self.db_path_patch = patch.object(db, "DB_PATH", self.db_path)
         self.db_path_patch.start()
+        self.now_patch = patch("app.scheduler._utc_now", return_value=NOW)
+        self.now_patch.start()
         db.init_db()
+        self.set_categories(["World"])
+        with scheduler_module._pipeline_lock:
+            scheduler_module._pipeline_running = False
+            scheduler_module._pipeline_rerun_requested = False
 
     def tearDown(self) -> None:
+        with scheduler_module._pipeline_lock:
+            self.assertFalse(scheduler_module._pipeline_running)
+            scheduler_module._pipeline_rerun_requested = False
+        self.now_patch.stop()
         self.db_path_patch.stop()
         self.temp_dir.cleanup()
+
+    def set_categories(self, categories: list[str]) -> None:
+        with db.get_conn() as conn:
+            conn.execute(
+                """
+                UPDATE preferences
+                SET selected_categories = ?, onboarded = 1
+                WHERE id = 1
+                """,
+                (json.dumps(categories),),
+            )
 
     def insert_article(
         self,
         url: str,
         *,
+        category: str = "World",
+        published_at: datetime | None = NOW,
+        fetched_at: datetime = NOW,
         raw_excerpt: str = "RSS excerpt",
         summary_status: str = "pending",
         summary_facts: str | None = None,
         summary_impact: str | None = None,
     ) -> int:
         with db.get_conn() as conn:
-            feed_id = conn.execute("SELECT id FROM feeds ORDER BY id LIMIT 1").fetchone()[
-                0
-            ]
+            feed = conn.execute(
+                """
+                SELECT id, name
+                FROM feeds
+                WHERE category = ?
+                ORDER BY id
+                LIMIT 1
+                """,
+                (category,),
+            ).fetchone()
             cursor = conn.execute(
                 """
                 INSERT INTO articles (
-                    feed_id,
-                    url,
-                    title,
-                    source,
-                    category,
-                    fetched_at,
-                    raw_excerpt,
-                    summary_facts,
-                    summary_impact,
+                    feed_id, url, title, source, category, published_at,
+                    fetched_at, raw_excerpt, summary_facts, summary_impact,
                     summary_status
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    feed_id,
+                    feed["id"],
                     url,
                     f"Title for {url}",
-                    "BBC World News",
-                    "World",
-                    "2026-07-06T00:00:00+00:00",
+                    feed["name"],
+                    category,
+                    published_at.isoformat() if published_at else None,
+                    fetched_at.isoformat(),
                     raw_excerpt,
                     summary_facts,
                     summary_impact,
@@ -65,91 +95,115 @@ class PipelineTests(unittest.TestCase):
             )
             return cursor.lastrowid
 
-    @patch("app.scheduler.fetch_all_feeds", return_value=[])
+    @patch("app.scheduler.fetch_all_feeds")
     @patch("app.scheduler.extract_full_text")
-    @patch("app.scheduler.summarize_text")
-    def test_processes_pending_articles_with_extraction_and_excerpt_fallback(
-        self, summarize_mock, extract_mock, _fetch_mock
+    def test_skips_all_work_without_selected_categories(
+        self, extract_mock, fetch_mock
     ) -> None:
-        first_id = self.insert_article("https://example.com/first")
-        second_id = self.insert_article(
-            "https://example.com/second", raw_excerpt="Fallback excerpt"
+        self.set_categories([])
+        self.insert_article("https://example.com/pending")
+
+        with self.assertLogs("app.scheduler", level="INFO") as logs:
+            run_pipeline()
+
+        fetch_mock.assert_not_called()
+        extract_mock.assert_not_called()
+        self.assertTrue(
+            any("no categories are selected" in line for line in logs.output)
         )
-        done_id = self.insert_article(
-            "https://example.com/done",
-            summary_status="done",
-            summary_facts="Existing facts",
-            summary_impact="Existing impact",
+
+    @patch("app.scheduler.fetch_all_feeds", return_value=[])
+    def test_scopes_pending_work_purges_stale_rows_and_commits_newest_first(
+        self, fetch_mock
+    ) -> None:
+        newest_id = self.insert_article(
+            "https://example.com/newest",
+            published_at=NOW - timedelta(hours=1),
         )
-        extract_mock.side_effect = (("Extracted full text", True), (None, False))
-        observed_first_status: list[str] = []
+        older_id = self.insert_article(
+            "https://example.com/older",
+            published_at=NOW - timedelta(hours=2),
+            raw_excerpt="Fallback excerpt",
+        )
+        tech_id = self.insert_article(
+            "https://example.com/unselected",
+            category="Tech",
+            published_at=NOW - timedelta(minutes=30),
+        )
+        stale_id = self.insert_article(
+            "https://example.com/stale",
+            published_at=NOW - timedelta(hours=49),
+        )
         summary_inputs: list[str] = []
+        observed_newest_status: list[str] = []
+
+        def extract(url: str) -> tuple[str | None, bool]:
+            if url.endswith("/newest"):
+                return "Newest full text", True
+            return None, False
 
         def summarize(text: str) -> tuple[str, str]:
             summary_inputs.append(text)
             if len(summary_inputs) == 2:
                 with db.get_conn() as observer:
-                    observed_first_status.append(
+                    observed_newest_status.append(
                         observer.execute(
                             "SELECT summary_status FROM articles WHERE id = ?",
-                            (first_id,),
+                            (newest_id,),
                         ).fetchone()[0]
                     )
-            return f"Facts {len(summary_inputs)}", f"Impact {len(summary_inputs)}"
+            return f"Facts for {text}", f"Impact for {text}"
 
-        summarize_mock.side_effect = summarize
-
-        with self.assertLogs("app.scheduler", level="INFO") as logs:
+        with (
+            patch("app.scheduler.PIPELINE_CONCURRENCY", 1),
+            patch("app.scheduler.extract_full_text", side_effect=extract),
+            patch("app.scheduler.summarize_text", side_effect=summarize),
+            self.assertLogs("app.scheduler", level="INFO") as logs,
+        ):
             run_pipeline()
 
         with db.get_conn() as conn:
             rows = {
                 row["id"]: row
                 for row in conn.execute(
-                    """
-                    SELECT id, extracted_text, extraction_ok, summary_facts,
-                           summary_impact, summary_status
-                    FROM articles
-                    ORDER BY id
-                    """
+                    "SELECT id, extracted_text, extraction_ok, summary_status FROM articles"
                 )
             }
 
-        self.assertEqual(["Extracted full text", "Fallback excerpt"], summary_inputs)
-        self.assertEqual(["done"], observed_first_status)
-        self.assertEqual("Extracted full text", rows[first_id]["extracted_text"])
-        self.assertEqual(1, rows[first_id]["extraction_ok"])
-        self.assertEqual("Facts 1", rows[first_id]["summary_facts"])
-        self.assertEqual("done", rows[first_id]["summary_status"])
-        self.assertIsNone(rows[second_id]["extracted_text"])
-        self.assertEqual(0, rows[second_id]["extraction_ok"])
-        self.assertEqual("Facts 2", rows[second_id]["summary_facts"])
-        self.assertEqual("done", rows[second_id]["summary_status"])
-        self.assertEqual("Existing facts", rows[done_id]["summary_facts"])
+        fetch_mock.assert_called_once_with(ANY, ["World"], now=NOW)
+        self.assertEqual(["Newest full text", "Fallback excerpt"], summary_inputs)
+        self.assertEqual(["done"], observed_newest_status)
+        self.assertEqual("done", rows[newest_id]["summary_status"])
+        self.assertEqual(1, rows[newest_id]["extraction_ok"])
+        self.assertEqual("done", rows[older_id]["summary_status"])
+        self.assertEqual("pending", rows[tech_id]["summary_status"])
+        self.assertNotIn(stale_id, rows)
         self.assertTrue(
-            any("fetched=0 summarized=2 failed=0" in line for line in logs.output)
+            any(
+                "fetched=0 summarized=2 failed=0 purged=1" in line
+                for line in logs.output
+            )
         )
 
-        extract_mock.reset_mock()
-        summarize_mock.reset_mock()
-        run_pipeline()
-        extract_mock.assert_not_called()
-        summarize_mock.assert_not_called()
-
     @patch("app.scheduler.extract_full_text", return_value=("Fresh full text", True))
-    def test_processes_new_article_inserted_by_ingestion(self, _extract_mock) -> None:
+    def test_commits_ingestion_before_processing_new_article(
+        self, _extract_mock
+    ) -> None:
         inserted_ids: list[int] = []
         visible_after_ingest_commit: list[bool] = []
 
-        def ingest(conn) -> list[int]:
-            feed_id = conn.execute("SELECT id FROM feeds ORDER BY id LIMIT 1").fetchone()[
-                0
-            ]
+        def ingest(conn, categories, *, now) -> list[int]:
+            self.assertEqual(["World"], categories)
+            self.assertEqual(NOW, now)
+            feed_id = conn.execute(
+                "SELECT id FROM feeds WHERE category = 'World' ORDER BY id LIMIT 1"
+            ).fetchone()[0]
             cursor = conn.execute(
                 """
                 INSERT INTO articles (
-                    feed_id, url, title, source, category, fetched_at, raw_excerpt
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    feed_id, url, title, source, category, published_at,
+                    fetched_at, raw_excerpt
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     feed_id,
@@ -157,14 +211,15 @@ class PipelineTests(unittest.TestCase):
                     "New article",
                     "BBC World News",
                     "World",
-                    "2026-07-06T00:00:00+00:00",
+                    NOW.isoformat(),
+                    NOW.isoformat(),
                     "Fresh excerpt",
                 ),
             )
             inserted_ids.append(cursor.lastrowid)
             return [cursor.lastrowid]
 
-        def summarize(text: str) -> tuple[str, str]:
+        def summarize(_text: str) -> tuple[str, str]:
             with db.get_conn() as observer:
                 visible_after_ingest_commit.append(
                     observer.execute(
@@ -195,16 +250,32 @@ class PipelineTests(unittest.TestCase):
         )
 
     @patch("app.scheduler.fetch_all_feeds", return_value=[])
-    @patch("app.scheduler.extract_full_text", return_value=("Extracted text", True))
-    @patch("app.scheduler.summarize_text")
     def test_marks_model_failure_and_continues_with_next_article(
-        self, summarize_mock, _extract_mock, _fetch_mock
+        self, _fetch_mock
     ) -> None:
-        failed_id = self.insert_article("https://example.com/fails")
-        done_id = self.insert_article("https://example.com/succeeds")
-        summarize_mock.side_effect = (None, ("Facts", "Impact"))
+        failed_id = self.insert_article(
+            "https://example.com/fails",
+            published_at=NOW,
+        )
+        done_id = self.insert_article(
+            "https://example.com/succeeds",
+            published_at=NOW - timedelta(minutes=1),
+        )
 
-        run_pipeline()
+        def summarize(text: str):
+            if "fails" in text:
+                return None
+            return "Facts", "Impact"
+
+        def extract(url: str):
+            return f"Extracted text for {url}", True
+
+        with (
+            patch("app.scheduler.PIPELINE_CONCURRENCY", 1),
+            patch("app.scheduler.extract_full_text", side_effect=extract),
+            patch("app.scheduler.summarize_text", side_effect=summarize),
+        ):
+            run_pipeline()
 
         with db.get_conn() as conn:
             failed = conn.execute(
@@ -216,22 +287,37 @@ class PipelineTests(unittest.TestCase):
                 (done_id,),
             ).fetchone()
 
-        self.assertEqual(("Extracted text", 1, "failed"), tuple(failed))
+        self.assertEqual(1, failed["extraction_ok"])
+        self.assertEqual("failed", failed["summary_status"])
         self.assertEqual(("Facts", "Impact", "done"), tuple(succeeded))
 
     @patch("app.scheduler.fetch_all_feeds", return_value=[])
-    @patch("app.scheduler.extract_full_text")
-    @patch("app.scheduler.summarize_text", return_value=("Facts", "Impact"))
     def test_contains_unexpected_article_failure_and_continues(
-        self, summarize_mock, extract_mock, _fetch_mock
+        self, _fetch_mock
     ) -> None:
-        failed_id = self.insert_article("https://example.com/extraction-fails")
-        done_id = self.insert_article(
-            "https://example.com/fallback", raw_excerpt="Usable excerpt"
+        failed_id = self.insert_article(
+            "https://example.com/extraction-fails",
+            published_at=NOW,
         )
-        extract_mock.side_effect = (RuntimeError("broken extractor"), (None, False))
+        done_id = self.insert_article(
+            "https://example.com/fallback",
+            published_at=NOW - timedelta(minutes=1),
+            raw_excerpt="Usable excerpt",
+        )
 
-        with self.assertLogs("app.scheduler", level="ERROR") as logs:
+        def extract(url: str):
+            if url.endswith("/extraction-fails"):
+                raise RuntimeError("broken extractor")
+            return None, False
+
+        with (
+            patch("app.scheduler.PIPELINE_CONCURRENCY", 1),
+            patch("app.scheduler.extract_full_text", side_effect=extract),
+            patch(
+                "app.scheduler.summarize_text", return_value=("Facts", "Impact")
+            ) as summarize_mock,
+            self.assertLogs("app.scheduler", level="ERROR") as logs,
+        ):
             run_pipeline()
 
         with db.get_conn() as conn:
@@ -260,17 +346,68 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual("pending", status)
         self.assertTrue(any("database issue" in line for line in logs.output))
 
-    @patch("app.scheduler.get_conn")
-    def test_skips_overlapping_run(self, get_conn_mock) -> None:
-        scheduler_module._pipeline_lock.acquire()
-        try:
-            with self.assertLogs("app.scheduler", level="INFO") as logs:
-                run_pipeline()
-        finally:
-            scheduler_module._pipeline_lock.release()
+    @patch("app.scheduler.fetch_all_feeds", return_value=[])
+    @patch("app.scheduler.summarize_text", return_value=("Facts", "Impact"))
+    def test_processes_three_articles_concurrently(
+        self, _summarize_mock, _fetch_mock
+    ) -> None:
+        for index in range(3):
+            self.insert_article(f"https://example.com/concurrent-{index}")
 
-        get_conn_mock.assert_not_called()
-        self.assertTrue(any("another run is active" in line for line in logs.output))
+        barrier = Barrier(3, timeout=2)
+        worker_names: set[str] = set()
+        names_lock = Lock()
+
+        def extract(_url: str) -> tuple[str, bool]:
+            with names_lock:
+                worker_names.add(current_thread().name)
+            barrier.wait()
+            return "Extracted text", True
+
+        with patch("app.scheduler.extract_full_text", side_effect=extract):
+            run_pipeline()
+
+        with db.get_conn() as conn:
+            statuses = [
+                row[0]
+                for row in conn.execute(
+                    "SELECT summary_status FROM articles ORDER BY id"
+                )
+            ]
+
+        self.assertEqual(["done", "done", "done"], statuses)
+        self.assertEqual(3, len(worker_names))
+
+    def test_overlapping_trigger_queues_rerun_with_fresh_preferences(self) -> None:
+        first_cycle_started = Event()
+        finish_first_cycle = Event()
+        observed_categories: list[list[str]] = []
+
+        def cycle() -> None:
+            with db.get_conn() as conn:
+                observed_categories.append(
+                    scheduler_module._selected_categories(conn)
+                )
+            if len(observed_categories) == 1:
+                first_cycle_started.set()
+                self.assertTrue(finish_first_cycle.wait(timeout=2))
+
+        with (
+            patch("app.scheduler._run_pipeline_cycle", side_effect=cycle),
+            self.assertLogs("app.scheduler", level="INFO") as logs,
+        ):
+            runner = Thread(target=run_pipeline)
+            runner.start()
+            self.assertTrue(first_cycle_started.wait(timeout=2))
+            self.set_categories(["Tech"])
+            run_pipeline()
+            finish_first_cycle.set()
+            runner.join(timeout=2)
+
+        self.assertFalse(runner.is_alive())
+        self.assertEqual([["World"], ["Tech"]], observed_categories)
+        self.assertTrue(any("rerun queued" in line for line in logs.output))
+        self.assertTrue(any("Starting queued" in line for line in logs.output))
 
 
 class SchedulerConfigurationTests(unittest.TestCase):
@@ -294,7 +431,5 @@ class SchedulerConfigurationTests(unittest.TestCase):
         self.assertTrue(kwargs["replace_existing"])
         self.assertTrue(kwargs["coalesce"])
         self.assertEqual(1, kwargs["max_instances"])
-
-
 if __name__ == "__main__":
     unittest.main()

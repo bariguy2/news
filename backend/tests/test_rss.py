@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import UTC, datetime
 import tempfile
 import unittest
 from pathlib import Path
@@ -7,6 +7,9 @@ from unittest.mock import patch
 
 from app import db
 from app.ingest.rss import fetch_all_feeds, verify_feed
+
+
+NOW = datetime(2026, 7, 7, 12, 0, tzinfo=UTC)
 
 
 class FeedVerificationTests(unittest.TestCase):
@@ -79,8 +82,8 @@ class FeedIngestionTests(unittest.TestCase):
             conn.execute("UPDATE feeds SET enabled = 0")
             conn.execute("UPDATE feeds SET enabled = 1 WHERE id = 1")
 
-            first_ids = fetch_all_feeds(conn, lambda _: parsed)
-            second_ids = fetch_all_feeds(conn, lambda _: parsed)
+            first_ids = fetch_all_feeds(conn, ["World"], lambda _: parsed, now=NOW)
+            second_ids = fetch_all_feeds(conn, ["World"], lambda _: parsed, now=NOW)
             rows = conn.execute("SELECT * FROM articles").fetchall()
 
         self.assertEqual(1, len(first_ids))
@@ -108,13 +111,34 @@ class FeedIngestionTests(unittest.TestCase):
 
         with db.get_conn() as conn:
             conn.execute("UPDATE feeds SET enabled = 0 WHERE id != 2")
-            new_ids = fetch_all_feeds(conn, parse)
+            new_ids = fetch_all_feeds(conn, ["World"], parse, now=NOW)
             enabled_url = conn.execute(
                 "SELECT url FROM feeds WHERE id = 2"
             ).fetchone()[0]
 
         self.assertEqual([], new_ids)
         self.assertEqual([enabled_url], requested_urls)
+
+    def test_fetches_only_selected_categories_and_skips_empty_selection(self) -> None:
+        requested_urls: list[str] = []
+
+        def parse(url: str) -> SimpleNamespace:
+            requested_urls.append(url)
+            return SimpleNamespace(status=200, bozo=False, entries=[])
+
+        with db.get_conn() as conn:
+            empty_ids = fetch_all_feeds(conn, [], parse, now=NOW)
+            tech_ids = fetch_all_feeds(conn, ["Tech"], parse, now=NOW)
+            expected_urls = [
+                row[0]
+                for row in conn.execute(
+                    "SELECT url FROM feeds WHERE category = 'Tech' ORDER BY id"
+                )
+            ]
+
+        self.assertEqual([], empty_ids)
+        self.assertEqual([], tech_ids)
+        self.assertEqual(expected_urls, requested_urls)
 
     def test_feed_and_entry_failures_do_not_block_other_entries(self) -> None:
         valid_entry = {
@@ -137,7 +161,7 @@ class FeedIngestionTests(unittest.TestCase):
         with db.get_conn() as conn:
             conn.execute("UPDATE feeds SET enabled = 0 WHERE id > 2")
             with self.assertLogs("app.ingest.rss", level="WARNING") as logs:
-                new_ids = fetch_all_feeds(conn, parse)
+                new_ids = fetch_all_feeds(conn, ["World"], parse, now=NOW)
             article = conn.execute(
                 "SELECT source, category, published_at, raw_excerpt FROM articles"
             ).fetchone()
@@ -157,11 +181,47 @@ class FeedIngestionTests(unittest.TestCase):
         with db.get_conn() as conn:
             conn.execute("UPDATE feeds SET enabled = 0 WHERE id != 1")
             with self.assertLogs("app.ingest.rss", level="WARNING"):
-                new_ids = fetch_all_feeds(conn, lambda _: parsed)
+                new_ids = fetch_all_feeds(
+                    conn, ["World"], lambda _: parsed, now=NOW
+                )
             article_count = conn.execute("SELECT COUNT(*) FROM articles").fetchone()[0]
 
         self.assertEqual([], new_ids)
         self.assertEqual(0, article_count)
+
+    def test_skips_entries_older_than_the_recency_window(self) -> None:
+        entries = [
+            {
+                "link": "https://example.com/stale",
+                "title": "Stale story",
+                "published_parsed": (2026, 7, 5, 11, 59, 0, 0, 0, 0),
+            },
+            {
+                "link": "https://example.com/recent",
+                "title": "Recent story",
+                "published_parsed": (2026, 7, 5, 12, 1, 0, 0, 0, 0),
+            },
+            {
+                "link": "https://example.com/undated",
+                "title": "Undated story",
+            },
+        ]
+        parsed = SimpleNamespace(status=200, bozo=False, entries=entries)
+
+        with db.get_conn() as conn:
+            conn.execute("UPDATE feeds SET enabled = 0 WHERE id != 1")
+            new_ids = fetch_all_feeds(
+                conn, ["World"], lambda _: parsed, now=NOW
+            )
+            urls = {
+                row[0] for row in conn.execute("SELECT url FROM articles ORDER BY id")
+            }
+
+        self.assertEqual(2, len(new_ids))
+        self.assertEqual(
+            {"https://example.com/recent", "https://example.com/undated"},
+            urls,
+        )
 
 
 if __name__ == "__main__":

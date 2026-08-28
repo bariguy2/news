@@ -28,8 +28,10 @@ The system uses:
   connections with foreign-key enforcement and initializes the schema and
   seed rows idempotently.
 - Sources: eight curated RSS feeds parsed with `feedparser`.
-  `backend/app/ingest/rss.py` verifies the feeds and ingests entries from enabled
-  database rows, relying on the unique article URL constraint for deduplication.
+  `backend/app/ingest/rss.py` verifies the feeds and ingests entries only from
+  enabled feeds in the user's selected categories. It keeps entries published
+  within a rolling 48-hour window and relies on the unique article URL
+  constraint for deduplication.
   The live feed verification command is
   `.venv/bin/python -m app.ingest.rss`, run from `backend/`.
 - Extraction: `backend/app/ingest/extract.py` uses `trafilatura` and returns an
@@ -37,18 +39,21 @@ The system uses:
   RSS excerpt when extraction fails.
 - Summarization: `backend/app/summarize/ollama_client.py` calls local Ollama
   using the configurable `llama3.1:8b` model, parses literal FACTS/IMPACT
-  sections, and contains model failures.
+  sections, caps generation at 512 tokens, and contains model failures.
 - Scheduling: `backend/app/scheduler.py` configures an immediate APScheduler
   interval job inside the FastAPI lifespan. `POST /api/refresh` queues the same
-  pipeline through FastAPI background tasks.
+  pipeline through FastAPI background tasks, as does a successful preference
+  update.
 - REST API: FastAPI exposes completed article lists/details, feed categories,
   single-user preferences, and manual refresh under `/api`. Pydantic response
   models constrain public article fields, and CORS allows the Vite development
   origin at `http://localhost:5173`.
 - Frontend: React Router provides preference-gated onboarding, a
   category-filtered headline feed, and summary detail routes. Vite reads the API
-  origin from `VITE_API_BASE`; Vitest covers component behavior and Playwright
-  exercises the complete flow in local Chrome against isolated real API data.
+  origin from `VITE_API_BASE`; the feed polls every five seconds while empty
+  and every fifteen seconds once populated. Vitest covers component behavior
+  and Playwright exercises the complete flow in local Chrome against isolated
+  real API data.
 
 The implemented data flow is:
 
@@ -74,17 +79,19 @@ preferences and does not duplicate seed data.
 
 `backend/app/ingest/rss.py` provides a read-only live verification command for
 the starter feeds. A feed passes when it returns HTTP 2xx/3xx, parses without a
-`bozo` error, and contains at least one entry. On 2026-07-06, all eight feeds
-passed using feedparser 6.0.12's default user agent. Seven returned HTTP 200;
-BBC returned HTTP 302 and resolved to its HTTPS URL with 26 entries and no
-parser error. No feed URL or user-agent change was required.
+`bozo` error, and contains at least one entry. On 2026-08-27, all eight feeds
+passed using feedparser's default user agent with 10-44 entries. Seven returned
+HTTP 200; BBC returned HTTP 302 and resolved to its HTTPS URL with 26 entries
+and no parser error. No feed URL or user-agent change was required.
 
-`fetch_all_feeds(conn)` selects only enabled feeds, isolates feed request and
-HTTP failures, skips entries without a URL or title, converts parsed publication
-times to UTC ISO-8601 strings, and inserts article stub rows with
-`INSERT OR IGNORE`. It returns only newly inserted article IDs and leaves
-transaction control to its caller. Parser errors are logged, while any usable
-entries returned with a partial feed are still considered individually.
+`fetch_all_feeds(conn, categories)` selects only enabled feeds in the supplied
+categories and returns immediately for an empty selection. It isolates feed
+request and HTTP failures, skips entries without a URL or title, converts parsed
+publication times to UTC ISO-8601 strings, rejects entries older than 48 hours,
+and inserts article stub rows with `INSERT OR IGNORE`. Undated feed entries are
+kept as newly observed stories. It returns only newly inserted article IDs and
+leaves transaction control to its caller. Parser errors are logged, while any
+usable entries returned with a partial feed are still considered individually.
 
 `extract_full_text(url)` downloads with `trafilatura.fetch_url`, extracts plain
 text with comments disabled and recall favored, trims the result, and accepts it
@@ -96,21 +103,24 @@ passes the RSS excerpt to the summarizer.
 
 `build_summary_prompt()` limits article input to 6,000 characters and requires
 literal `===FACTS===` and `===IMPACT===` sections. `summarize_text()` calls
-Ollama with the configured model and temperature 0.3, validates that both parsed
-sections are non-empty, and retries malformed output once with an explicit
-format reminder. Empty input, model transport errors, or a second malformed
-response return `None` without raising; the pipeline translates that result to
-a failed article status.
+Ollama with the configured model, temperature 0.3, and a 512-token generation
+cap, validates that both parsed sections are non-empty, and retries malformed
+output once with an explicit format reminder. Empty input, model transport
+errors, or a second malformed response return `None` without raising; the
+pipeline translates that result to a failed article status.
 
-`run_pipeline()` commits newly ingested stubs, then processes every article with
-`summary_status='pending'` in ID order. It persists extraction and summary
-results with a commit after each article, marks malformed/model-failed summaries
-as `failed`, resumes pending rows after restart, and never reprocesses `done` or
-`failed` rows. Expected dependency failures and unexpected per-article failures
-are logged without stopping later articles; completion logs fetched,
-summarized, and failed counts. A process-local non-blocking lock skips an
-overlapping scheduled or manual run to prevent duplicate extraction and model
-work.
+`run_pipeline()` reads the current selected categories and does no feed work
+before onboarding. Each active cycle purges rows older than 48 hours, commits
+newly ingested stubs, then processes only selected-category rows with
+`summary_status='pending'`, newest first. Up to three workers perform extraction
+and Ollama calls without database access; the coordinator owns all SQLite writes
+and commits after each article. Malformed/model-failed summaries are marked
+`failed`; pending rows resume after restart, while `done` and `failed` rows are
+not reprocessed. Expected dependency failures and unexpected per-article
+failures are logged without stopping later articles. An overlapping scheduled,
+manual, or preference-triggered call records a guaranteed rerun; the active
+runner repeats the full cycle with freshly-read preferences instead of dropping
+the trigger.
 
 FastAPI startup initializes the database, creates and starts a scheduler with an
 immediate run and a configurable 30-minute interval, and shuts that scheduler
@@ -124,15 +134,17 @@ time. `GET /api/articles/{id}` returns the two summary fields only for completed
 articles and otherwise returns 404. Neither route exposes `raw_excerpt` or
 `extracted_text`. `GET /api/categories` returns sorted distinct feed
 categories. `GET /api/preferences` returns the decoded single-user row, while
-`POST /api/preferences` upserts the supplied category list and marks onboarding
-complete. CORS preflight responses allow `http://localhost:5173` and do not
-allow unrelated origins.
+`POST /api/preferences` upserts the supplied category list, marks onboarding
+complete, and queues an immediate pipeline cycle. CORS preflight responses
+allow `http://localhost:5173` by default and do not allow unrelated origins;
+the allowed frontend origin is configurable for isolated browser tests.
 
 The React application reads preferences before routing. A new local user is
 sent to `/onboarding`, where categories come from the API and at least one must
 be selected before preferences are saved. An onboarded user is sent to `/feed`;
 that screen reloads persisted categories, requests the filtered headline list,
-renders source/category/relative-time cards, and links each card to
+renders source/category/relative-time cards, silently polls every five seconds
+while empty and every fifteen seconds once populated, and links each card to
 `/article/:id`. The detail screen shows FACTS, a visually distinct IMPACT
 section, and an original-source link with `target="_blank"` and
 `rel="noopener noreferrer"`. Loading, empty, API-error, and retry states are
@@ -145,8 +157,9 @@ and the local ignored `frontend/.env` set
 `frontend/package-lock.json`.
 
 `scripts/start.sh` is the detached one-command launcher. It starts
-Ollama only when the service is unavailable, then starts non-reloading Uvicorn
-and direct Vite processes, records the application PIDs under `.run/`, and
+Ollama with `OLLAMA_NUM_PARALLEL=3` by default only when the service is
+unavailable, then starts non-reloading Uvicorn and direct Vite processes,
+records the application PIDs under `.run/`, and
 writes service output under `logs/`. Re-running it bounces only those tracked
 backend and frontend processes. It polls real HTTP endpoints before reporting
 readiness, tails the relevant log on failure, and refuses to replace untracked
@@ -158,8 +171,11 @@ PID-tracked backend/frontend processes, refuses to delete data while an
 untracked application server is present, atomically deletes every article and
 clears onboarding preferences with `sqlite3`, calls `scripts/start.sh`, and
 posts `/api/refresh`. Because backend startup already schedules an immediate
-pipeline run, article rows may be repopulated before the reset script returns;
-the isolated integration test verifies the zero-row transaction boundary.
+pipeline run, the scheduler still wakes during relaunch, but the cleared
+category selection makes both that run and the reset script's manual refresh
+no-ops. Articles begin repopulating only after onboarding saves at least one
+category and triggers its own refresh. The isolated integration test verifies
+the zero-row transaction boundary.
 
 - Done: Step 0, repository scaffold and local toolchain setup; Step 1, SQLite
   schema, connection helper, idempotent initialization, startup integration,
@@ -183,7 +199,11 @@ the isolated integration test verifies the zero-row transaction boundary.
   fixed-port fresh-launch, bounce, and stale-PID verification. The
   `docs/plan_reset_feed.md` destructive article/onboarding reset, guarded
   relaunch, immediate refresh, documentation, isolated integration coverage,
-  and real running/cold/repeated reset verification are complete.
+  and real running/cold/repeated reset verification are complete. The
+  `docs/plan_pipeline_scoping.md` selection-scoped, 48-hour pipeline,
+  newest-first bounded concurrency, queued refresh reruns, generation cap,
+  adaptive feed polling, tests, and isolated real integration verification are
+  complete.
 - In progress: final MVP failure verification. The physical checklist action of
   stopping the user's running Ollama service mid-pipeline remains unperformed;
   automated tests cover model unavailability without disrupting that external
@@ -246,17 +266,35 @@ Verified commands and checks:
   runtime PID files, confirmed ports 8000/5173 were closed, and left Ollama
   unchanged. The database ended with 168 newly ingested articles (one done, 167
   pending) and preferences at `onboarded=0`, `selected_categories='[]'`; this
-  nonzero count is expected because the scheduler starts immediately during
-  relaunch.
-- `.venv/bin/python -m unittest discover -s tests -v` — passes 41 database,
+  nonzero count reflected the then-current unscoped startup pipeline. The
+  current selection-scoped pipeline keeps the reset database empty until
+  onboarding saves a category.
+- `.venv/bin/python -m unittest discover -s tests -v` — passes 45 database,
   ingestion, extraction, summarization, pipeline, scheduler, lifespan, REST API,
-  persistence, response-shape, and CORS tests.
+  persistence, response-shape, and CORS tests. The pipeline coverage includes
+  empty-selection skipping, selected-category scoping, the 48-hour purge,
+  newest-first per-article commits, three simultaneous workers, and a queued
+  rerun that observes changed preferences.
 - `.venv/bin/python -m compileall -q app tests` — passes.
 - `uv sync` — resolves 45 packages and checks the backend environment from
   `backend/uv.lock`.
 - `ollama list` — shows the configured `llama3.1:8b` model locally.
 - `.venv/bin/python -m app.ingest.rss` — live-checks all eight starter feeds;
-  on 2026-07-06 all passed with 10-39 entries per feed.
+  on 2026-08-27 all passed with 10-44 entries per feed. BBC returned HTTP 302
+  and the other seven returned HTTP 200, all without parser errors.
+- A 2026-08-27 live selected-category ingestion check used a fresh temporary
+  database and requested only Tech. It inserted 50 rows, every row had category
+  `Tech`, and no row with a publication time was outside the rolling 48-hour
+  window. The temporary database was removed.
+- A 2026-08-27 real concurrency check sent three synthetic articles through
+  `llama3.1:8b` simultaneously. All three returned valid, non-empty FACTS and
+  IMPACT sections in 14.89 seconds with section lengths of 233-257 and 371-430
+  characters. The check was read-only and did not modify application data.
+- A 2026-08-27 isolated end-to-end pipeline check limited the live TechCrunch
+  feed to one current entry and used a temporary database. Real extraction
+  succeeded, real Ollama summarization stored `summary_status='done'`, and the
+  saved row contained 357 FACTS characters and 619 IMPACT characters. The
+  temporary probe and database were removed.
 - A 2026-07-06 live integration run against a fresh temporary database inserted
   165 article rows from all eight feeds. Every row had required fields populated
   and `summary_status='pending'`; there were no duplicate URLs. Running the same
@@ -294,7 +332,9 @@ Verified commands and checks:
   FACTS and 665-character IMPACT sections with `summary_status='done'`.
 - `npm install` — installs the locked frontend and test dependencies with zero
   reported vulnerabilities.
-- `npm test` — passes 3 Vitest component/helper tests across 2 files.
+- `npm test` — passes 4 Vitest component/helper tests across 3 files,
+  including empty-feed five-second polling, silent story appearance, transition
+  to the fifteen-second populated interval, and timer cleanup on unmount.
 - `npm run build` — completes the Vite production build with 29 transformed
   modules.
 - `npm run test:e2e` — passes the Playwright Chrome flow against an isolated
@@ -302,7 +342,14 @@ Verified commands and checks:
   onboarding, persisted category selection, filtered headlines, detail FACTS
   and IMPACT, root redirect after onboarding, and an actual intercepted
   new-tab source-link popup. The generated detail screenshot was visually
-  inspected for layout and IMPACT distinction. No application data was changed.
+  inspected for layout and IMPACT distinction. On 2026-08-27 it passed using
+  `NEWS_E2E_BACKEND_PORT=18000` and `NEWS_E2E_FRONTEND_PORT=15173` because
+  user-owned processes were already serving the default ports. The isolated
+  listeners were verified closed afterward, and a filtered process check found
+  no Playwright, test Chrome, isolated API, or alternate-port Vite process. The
+  pre-existing backend/frontend PIDs were unchanged immediately after the test;
+  at final handoff they were still alive but no longer listening on ports 8000
+  or 5173. The agent did not signal them. No application data was changed.
 - Starting the FastAPI lifespan against a deleted `data/news.db`, twice, then
   inspecting it with `sqlite3` verifies three tables, both article indexes,
   eight enabled feeds, one default preference row, and idempotent startup.

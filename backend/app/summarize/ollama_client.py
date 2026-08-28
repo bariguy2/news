@@ -5,7 +5,7 @@ import re
 
 import ollama
 
-from app.config import MODEL_NAME
+from app.config import MODEL_NAME, SUMMARY_MAX_TOKENS
 from app.summarize.prompt import (
     FACTS_MARKER,
     IMPACT_MARKER,
@@ -53,7 +53,7 @@ def summarize_text(article_text: str) -> Summary | None:
             response = ollama.chat(
                 model=MODEL_NAME,
                 messages=[{"role": "user", "content": prompt}],
-                options={"temperature": 0.3},
+                options={"temperature": 0.3, "num_predict": SUMMARY_MAX_TOKENS},
             )
         except Exception:
             logger.exception("Ollama summarization failed using model %s", MODEL_NAME)

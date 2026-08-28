@@ -1,6 +1,7 @@
 """Isolated real API server used by the frontend Playwright flow."""
 
 from contextlib import asynccontextmanager
+import os
 from pathlib import Path
 import sys
 import tempfile
@@ -63,6 +64,10 @@ with db.get_conn() as conn:
     )
 
 from app.main import app  # noqa: E402
+from app.routes import preferences as preferences_routes  # noqa: E402
+
+
+preferences_routes.run_pipeline = lambda: None
 
 
 @asynccontextmanager
@@ -75,4 +80,5 @@ app.router.lifespan_context = isolated_lifespan
 
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="127.0.0.1", port=8000, log_level="warning")
+    port = int(os.environ.get("NEWS_E2E_BACKEND_PORT", "8000"))
+    uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning")

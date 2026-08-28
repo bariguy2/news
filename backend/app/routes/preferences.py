@@ -3,10 +3,11 @@
 import json
 import sqlite3
 
-from fastapi import APIRouter
+from fastapi import APIRouter, BackgroundTasks
 from pydantic import BaseModel
 
 from app.db import get_conn
+from app.scheduler import run_pipeline
 
 
 router = APIRouter(prefix="/api/preferences", tags=["preferences"])
@@ -45,7 +46,10 @@ def get_preferences() -> dict[str, object]:
 
 
 @router.post("", response_model=PreferencesResponse)
-def update_preferences(preferences: PreferencesUpdate) -> dict[str, object]:
+def update_preferences(
+    preferences: PreferencesUpdate,
+    background_tasks: BackgroundTasks,
+) -> dict[str, object]:
     """Persist selected categories and mark onboarding complete."""
     selected_categories = json.dumps(preferences.selected_categories)
     with get_conn() as conn:
@@ -67,4 +71,5 @@ def update_preferences(preferences: PreferencesUpdate) -> dict[str, object]:
             """
         ).fetchone()
 
+    background_tasks.add_task(run_pipeline)
     return _preferences_response(row)

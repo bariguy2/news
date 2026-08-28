@@ -2,13 +2,14 @@
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 import logging
 import sqlite3
 from typing import Any
 
 import feedparser
 
+from app.config import RECENCY_WINDOW_HOURS
 from app.db import STARTER_FEEDS
 
 
@@ -71,23 +72,34 @@ def _published_at(entry: Any) -> str | None:
 
 def fetch_all_feeds(
     conn: sqlite3.Connection,
+    categories: list[str],
     parse: Callable[[str], Any] = feedparser.parse,
+    *,
+    now: datetime | None = None,
 ) -> list[int]:
-    """Insert new entries from enabled feeds and return their article IDs.
+    """Insert recent entries from selected enabled feeds and return their IDs.
 
     The caller owns the transaction. Feed request failures and malformed entries
     are logged and skipped so one source cannot prevent other feeds from being
     ingested.
     """
+    selected_categories = list(dict.fromkeys(categories))
+    if not selected_categories:
+        return []
+
+    placeholders = ", ".join("?" for _ in selected_categories)
     feeds = conn.execute(
-        """
+        f"""
         SELECT id, name, url, category
         FROM feeds
-        WHERE enabled = 1
+        WHERE enabled = 1 AND category IN ({placeholders})
         ORDER BY id
-        """
+        """,
+        selected_categories,
     ).fetchall()
-    fetched_at = datetime.now(UTC).isoformat()
+    reference_time = (now or datetime.now(UTC)).astimezone(UTC)
+    recency_cutoff = reference_time - timedelta(hours=RECENCY_WINDOW_HOURS)
+    fetched_at = reference_time.isoformat()
     new_article_ids: list[int] = []
 
     for feed in feeds:
@@ -120,6 +132,14 @@ def fetch_all_feeds(
                 )
                 continue
 
+            published_at = _published_at(entry)
+            if (
+                published_at is not None
+                and datetime.fromisoformat(published_at) < recency_cutoff
+            ):
+                logger.info("Skipping stale RSS entry %s", url)
+                continue
+
             cursor = conn.execute(
                 """
                 INSERT OR IGNORE INTO articles (
@@ -139,7 +159,7 @@ def fetch_all_feeds(
                     title,
                     feed["name"],
                     feed["category"],
-                    _published_at(entry),
+                    published_at,
                     fetched_at,
                     entry.get("summary", "") or "",
                 ),
