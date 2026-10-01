@@ -23,10 +23,12 @@ The system uses:
 
 - Backend: Python 3.12 managed with `uv`, FastAPI, and Uvicorn.
 - Frontend: React, Vite, and `react-router-dom`.
-- Storage: standard-library `sqlite3` with the hand-written
-  `backend/app/schema.sql`; no ORM. `backend/app/db.py` opens named-row
-  connections with foreign-key enforcement and initializes the schema and
-  seed rows idempotently.
+- Storage: SQLite remains the local default; setting backend-only
+  `DATABASE_URL` selects Supabase PostgreSQL through `psycopg`. The hand-written
+  `backend/app/schema.sql` and `backend/app/schema_postgres.sql` define matching
+  tables without an ORM. `backend/app/db.py` opens named-row connections and
+  initializes the selected schema and seed rows idempotently. The PostgreSQL
+  tables live in the private `news` schema.
 - Sources: eight curated RSS feeds parsed with `feedparser`.
   `backend/app/ingest/rss.py` verifies the feeds and ingests entries only from
   enabled feeds in the user's selected categories. It keeps entries published
@@ -44,20 +46,21 @@ The system uses:
   interval job inside the FastAPI lifespan. `POST /api/refresh` queues the same
   pipeline through FastAPI background tasks, as does a successful preference
   update.
-- REST API: FastAPI exposes completed article lists/details, feed categories,
+- REST API: FastAPI exposes pending/completed headline lists and completed details, feed categories,
   single-user preferences, and manual refresh under `/api`. Pydantic response
   models constrain public article fields, and CORS allows the Vite development
   origin at `http://localhost:5173`.
 - Frontend: React Router provides preference-gated onboarding, a
   category-filtered headline feed, and summary detail routes. Vite reads the API
-  origin from `VITE_API_BASE`; the feed polls every five seconds while empty
-  and every fifteen seconds once populated. Vitest covers component behavior
+  origin from `VITE_API_BASE`; the feed polls every five seconds while empty or
+  while any visible summary is pending, and every fifteen seconds once populated
+  with completed summaries. Vitest covers component behavior
   and Playwright exercises the complete flow in local Chrome against isolated
   real API data.
 
 The implemented data flow is:
 
-`RSS ingest -> article extraction -> Ollama summarization -> SQLite -> REST API -> React UI`
+`RSS ingest -> article extraction -> Ollama summarization -> SQLite or PostgreSQL -> REST API -> React UI`
 
 Important invariants:
 
@@ -70,6 +73,155 @@ Important invariants:
 - Keep the REST API client-agnostic for later mobile reuse.
 
 ## Current status
+
+### Supabase database connection (2026-09-30 to 2026-10-01)
+
+The user chose Supabase for hosted article and preference storage while keeping
+FastAPI, RSS/extraction, frontend, and local Ollama unchanged for now. The
+backend now selects PostgreSQL when `DATABASE_URL` is present and otherwise
+keeps the current SQLite behavior. It connects with `psycopg` and TLS, selects
+the private `news` schema per connection, and creates the schema, tables,
+indexes, eight feeds, and default preference row at startup. SQL write paths
+use PostgreSQL-compatible conflict handling and `RETURNING id` for new article
+rows. The PostgreSQL schema explicitly enables RLS on its three private tables;
+the database-owner connection used by FastAPI remains able to read and write.
+The database URL belongs only in ignored `backend/.env`, loaded by
+Uvicorn's `--env-file` option. The POSIX launcher inherits its environment but
+does not load this file. A Session pooler URI is
+recommended because the backend uses session-local schema selection. This is
+an explicit storage deviation from `docs/plan_mvp.md`; no cloud deployment,
+authentication, or hosted AI work was added. Existing SQLite articles are not
+copied; a new hosted database starts empty and can fetch current stories after
+onboarding.
+
+Verification on Windows: `uv lock` and `uv sync --locked` installed
+`psycopg[binary]`; 49 backend tests pass, including PostgreSQL connection,
+schema initialization, placeholder translation, and failure-close checks.
+`compileall` passes. The isolated Chrome E2E onboarding, feed, detail, and
+source-link flow passes against a temporary SQLite database and real API; its
+test API/Vite ports 18000/15173 and test processes were verified absent after
+completion. The first sandboxed browser run passed assertions but hung during
+Windows cleanup, was interrupted, and left no isolated server; the elevated
+rerun exited normally. The previously running development backend was stopped
+for editing, then restored as reload supervisor PID 39672 with API listener
+PID 34416. The user-requested frontend PID 42524 and Ollama PID 47112 were
+preserved. Ports 8000, 5173, and 11434 respond, while 18000/15173 are closed.
+The restored backend used SQLite until the hosted project was configured.
+
+On 2026-10-01, the user supplied an ignored `backend/.env` with a Supabase
+Session pooler URI. Its password still had the dashboard placeholder brackets;
+those brackets were removed locally without displaying or committing the
+credential. A real TLS connection and `SELECT 1` passed. Initialization created
+the private `news` schema, all three tables, eight feeds, and one default
+preference row. The initial automatic RLS project setting did not affect these
+custom-schema tables, so explicit `ALTER TABLE ... ENABLE ROW LEVEL SECURITY`
+statements were added to `schema_postgres.sql` and applied; catalog inspection
+confirmed RLS on all three tables. The 49 backend tests and `compileall` pass
+after that change.
+
+The tracked old SQLite backend tree (PIDs 39672, 34416, 26844, and its
+console child 26428) was stopped, reaped, and port 8000 verified closed. The
+backend was restarted with `--env-file .env` as tracked PID 42696; startup
+completed and Uvicorn reported loading `.env`. Its API returned five categories,
+fresh `onboarded=false` preferences, and zero articles from Supabase, while the
+frontend remained available. A completed probe article inserted into Supabase
+was returned by `GET /api/articles/{id}` with HTTP 200, then deleted and
+confirmed absent with HTTP 404. A second temporary article verified URL
+deduplication with `ON CONFLICT(url) DO NOTHING RETURNING id` and was removed.
+`POST /api/preferences` persisted a temporary selection in Supabase and was
+read back via the API; the original `[]`, `onboarded=0` state was restored.
+After explicit RLS activation, another API preference write succeeded and was
+restored. Final hosted article count was zero. Initialization ran once in a
+standalone process and again on FastAPI startup without duplicating seeds or
+overwriting preferences. The user-requested Vite and Ollama processes were
+preserved, and no temporary test server or probe row remains.
+
+Done: hosted database connection, schema, API read/write, deduplication, and
+restart-safe initialization. Ollama remains local and article summarization
+speed is unchanged. The project has not been deployed publicly.
+
+### Pending headline visibility (2026-09-30)
+
+The headline list now returns `pending` and `done` articles with a
+`summary_status` field. This deliberately extends the MVP plan's completed-only
+list contract so fetched headlines can appear before local Ollama finishes.
+The list still omits RSS excerpts, extracted text, and both summary fields;
+`failed` articles remain hidden. Detail remains available only for `done`
+articles and retains its prior response shape and 404 behavior. Pending cards
+show "Summary in progress" and a new-tab original-source link without offering
+an unavailable detail link. The feed polls every five seconds while empty or
+while any visible article is pending, then every fifteen seconds when all
+visible articles are complete. This improves perceived freshness without
+changing feed ingestion, model speed, or database storage.
+
+Verified on Windows: 46 backend tests pass, including pending/done list shapes,
+failed exclusion, filtering, status transition, private-field exclusion, and
+done-only detail. Five Vitest tests pass, including a pending-to-done polling
+transition. The Vite production build passes with 29 transformed modules.
+The isolated Chrome E2E test passes onboarding, pending and completed cards,
+filtered feed, detail, and original-source link. Its API/Vite listeners on
+ports 18000/15173 and Playwright Chrome process were verified absent after
+completion; no application database or user-owned process was touched. A
+captured feed screenshot was visually inspected for clear pending/completed
+distinction and a usable original-source link. The final E2E rerun passed and
+its child processes and listeners were again verified absent.
+
+Done: pending headline visibility and status behavior. Next: assess perceived
+speed with normal selected feeds, then decide whether model or hosting changes
+are needed. The pre-existing MVP Ollama interruption checklist item remains
+outstanding.
+
+### Windows environment setup (2026-09-27)
+
+The Windows PC is configured for the existing MVP: uv 0.12.17, Node 22.22.2,
+npm 10.9.7, Git, and Google Chrome were already available. `uv sync --locked`
+installed Python 3.12.14 and 43 backend packages; `npm.cmd ci` installed 116
+frontend packages. Winget installed Ollama 0.34.4, and `ollama pull llama3.1:8b`
+downloaded the 4.9 GB model. `frontend/.env` was created from its example.
+SQLite is provided by Python; no separate database server, WSL, or Docker is
+required. Windows run commands are in README.md; the POSIX launcher/reset
+scripts remain unchanged and are not Windows launchers.
+
+Two portability fixes deviate from the original macOS-only setup baseline:
+database connections now commit/roll back and explicitly close on context exit
+(Windows otherwise refuses temporary database deletion), and Playwright uses
+the Windows virtualenv executable on Windows and the installed Chrome channel
+on both platforms. An explicit Chrome path override remains supported.
+
+Verified on this PC:
+- `.venv/Scripts/python.exe -m unittest discover -s tests -q` from
+  backend: 46 tests pass, including
+  new connection-close, commit, and rollback coverage.
+- `.venv/Scripts/python.exe -m compileall -q app tests`: passes from backend.
+- `.venv/Scripts/python.exe -m app.ingest.rss`: all eight live feeds pass;
+  BBC returns 302, seven return 200, with 10-38 entries and no parser errors.
+- `npm.cmd test`: 4 tests pass; `npm.cmd run build`: passes, 29 modules.
+- `npm.cmd run test:e2e` with ports 18000/15173: passes onboarding, filtering,
+  detail, persisted preferences, and new-tab source link in real Chrome.
+  The detail screenshot was visually inspected. The first sandboxed run passed
+  assertions but could not finish process cleanup; its tracked process tree was
+  terminated, and an elevated rerun completed successfully with exit code zero.
+- `ollama list`: confirms llama3.1:8b. A real call through `summarize_text`
+  returned nonempty FACTS and IMPACT for a synthetic library-news article.
+  No application database was modified by these isolated checks.
+
+Process cleanup verified: the installer-started Ollama app (PID 39092), server
+(25944), and model descendants were terminated after verification. Process
+inspection found no remaining setup server, model process, or Playwright Chrome
+process; ports 8000, 5173, 18000, 15173, and 11434 had no listeners. Test and
+installer command sessions exited. Pre-existing user Chrome processes were
+preserved. The app is installed but intentionally not left running.
+
+`npm.cmd ci` reports seven dependency advisories (two moderate, five high).
+Locked versions were preserved; advisory remediation remains separate work.
+The existing FastAPI TestClient deprecation warning remains non-blocking.
+The original MVP stop-Ollama-mid-pipeline checklist item remains outstanding;
+normal shutdown after this setup's summary check does not satisfy that item.
+
+Done: Windows dependency installation and portability verification. Next: use
+the documented PowerShell terminals to run the app; address dependency
+advisories separately. Overall MVP completion remains subject to the existing
+failure-verification item below.
 
 Steps 0 through 11 are implemented. Backend startup initializes the SQLite
 database at `data/news.db`, creates the `feeds`, `articles`, and `preferences`
@@ -127,8 +279,8 @@ immediate run and a configurable 30-minute interval, and shuts that scheduler
 down during lifespan cleanup. `POST /api/refresh` returns
 `{"status": "started"}` and schedules `run_pipeline()` as a background task.
 
-The REST surface is now implemented. `GET /api/articles` returns only completed
-article headline metadata, supports a trimmed comma-separated `category`
+The REST surface is now implemented. `GET /api/articles` returns pending and completed
+article headline metadata plus `summary_status`, supports a trimmed comma-separated `category`
 filter and a positive `limit` (default 50), and orders by newest publication
 time. `GET /api/articles/{id}` returns the two summary fields only for completed
 articles and otherwise returns 404. Neither route exposes `raw_excerpt` or
@@ -144,8 +296,9 @@ sent to `/onboarding`, where categories come from the API and at least one must
 be selected before preferences are saved. An onboarded user is sent to `/feed`;
 that screen reloads persisted categories, requests the filtered headline list,
 renders source/category/relative-time cards, silently polls every five seconds
-while empty and every fifteen seconds once populated, and links each card to
-`/article/:id`. The detail screen shows FACTS, a visually distinct IMPACT
+while empty or pending and every fifteen seconds once all visible articles are
+complete. Completed cards link to `/article/:id`; pending cards show status and
+link to the original source. The detail screen shows FACTS, a visually distinct IMPACT
 section, and an original-source link with `target="_blank"` and
 `rel="noopener noreferrer"`. Loading, empty, API-error, and retry states are
 implemented without images or other out-of-scope features.

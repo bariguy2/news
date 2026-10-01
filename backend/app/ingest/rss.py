@@ -4,13 +4,12 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 import logging
-import sqlite3
 from typing import Any
 
 import feedparser
 
 from app.config import RECENCY_WINDOW_HOURS
-from app.db import STARTER_FEEDS
+from app.db import STARTER_FEEDS, DatabaseConnection
 
 
 logger = logging.getLogger(__name__)
@@ -71,7 +70,7 @@ def _published_at(entry: Any) -> str | None:
 
 
 def fetch_all_feeds(
-    conn: sqlite3.Connection,
+    conn: DatabaseConnection,
     categories: list[str],
     parse: Callable[[str], Any] = feedparser.parse,
     *,
@@ -140,9 +139,9 @@ def fetch_all_feeds(
                 logger.info("Skipping stale RSS entry %s", url)
                 continue
 
-            cursor = conn.execute(
+            inserted = conn.execute(
                 """
-                INSERT OR IGNORE INTO articles (
+                INSERT INTO articles (
                     feed_id,
                     url,
                     title,
@@ -152,6 +151,8 @@ def fetch_all_feeds(
                     fetched_at,
                     raw_excerpt
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(url) DO NOTHING
+                RETURNING id
                 """,
                 (
                     feed["id"],
@@ -164,8 +165,9 @@ def fetch_all_feeds(
                     entry.get("summary", "") or "",
                 ),
             )
-            if cursor.rowcount == 1:
-                new_article_ids.append(cursor.lastrowid)
+            row = inserted.fetchone()
+            if row is not None:
+                new_article_ids.append(row["id"])
 
     return new_article_ids
 

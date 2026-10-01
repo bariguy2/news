@@ -5,6 +5,9 @@ const backendPort = process.env.NEWS_E2E_BACKEND_PORT ?? '8000'
 const frontendPort = process.env.NEWS_E2E_FRONTEND_PORT ?? '5173'
 const backendURL = `http://127.0.0.1:${backendPort}`
 const frontendURL = `http://127.0.0.1:${frontendPort}`
+const backendPython = process.platform === 'win32'
+  ? '..\\backend\\.venv\\Scripts\\python.exe'
+  : '../backend/.venv/bin/python'
 
 
 export default defineConfig({
@@ -13,14 +16,13 @@ export default defineConfig({
   use: {
     baseURL: frontendURL,
     headless: true,
-    launchOptions: {
-      executablePath: process.env.PLAYWRIGHT_CHROME_PATH
-        ?? '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-    },
+    ...(process.env.PLAYWRIGHT_CHROME_PATH
+      ? { launchOptions: { executablePath: process.env.PLAYWRIGHT_CHROME_PATH } }
+      : { channel: 'chrome' }),
   },
   webServer: [
     {
-      command: '../backend/.venv/bin/python ../backend/tests/e2e_server.py',
+      command: `${backendPython} ../backend/tests/e2e_server.py`,
       url: `${backendURL}/api/categories`,
       env: {
         FRONTEND_ORIGIN: frontendURL,

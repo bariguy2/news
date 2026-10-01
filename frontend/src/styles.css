@@ -265,7 +265,7 @@ h1 {
   transition: 160ms ease;
 }
 
-.story-card:hover {
+.story-card:not(.story-card-pending):hover {
   border-color: #a9aea9;
   box-shadow: 0 0.9rem 2.5rem rgb(37 48 42 / 8%);
   transform: translateY(-2px);
@@ -289,6 +289,23 @@ h1 {
 
 .story-action {
   color: var(--accent);
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+
+.story-card-pending {
+  border-style: dashed;
+}
+
+.summary-pending {
+  margin-bottom: 0.65rem;
+  color: var(--muted);
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+
+.story-card-pending a {
+  color: var(--forest);
   font-size: 0.9rem;
   font-weight: 700;
 }

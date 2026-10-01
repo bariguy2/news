@@ -8,6 +8,21 @@ export const EMPTY_FEED_POLL_MS = 5_000
 export const POPULATED_FEED_POLL_MS = 15_000
 
 
+function StoryCardContent({ article }) {
+  return (
+    <>
+      <div className="story-meta">
+        <span className="category-badge">{article.category}</span>
+        <span>{article.source}</span>
+        <span aria-hidden="true">·</span>
+        <time dateTime={article.published_at ?? undefined}>{formatRelativeTime(article.published_at)}</time>
+      </div>
+      <h2>{article.title}</h2>
+    </>
+  )
+}
+
+
 function Feed() {
   const [articles, setArticles] = useState([])
   const [categories, setCategories] = useState([])
@@ -18,12 +33,12 @@ function Feed() {
   useEffect(() => {
     let active = true
     let pollTimer = null
-    let hasArticles = false
+    let hasPendingArticles = true
     setLoading(true)
     setError('')
 
     function schedulePoll(selectedCategories) {
-      const delay = hasArticles ? POPULATED_FEED_POLL_MS : EMPTY_FEED_POLL_MS
+      const delay = hasPendingArticles ? EMPTY_FEED_POLL_MS : POPULATED_FEED_POLL_MS
       pollTimer = window.setTimeout(
         () => loadArticles(selectedCategories, false),
         delay,
@@ -34,7 +49,7 @@ function Feed() {
       try {
         const result = await getArticles(selectedCategories)
         if (!active) return
-        hasArticles = result.length > 0
+        hasPendingArticles = result.length === 0 || result.some((article) => article.summary_status === 'pending')
         setArticles(result)
         setError('')
       } catch {
@@ -99,14 +114,22 @@ function Feed() {
 
       {!loading && !error && articles.length === 0 && (
         <section className="empty-state">
-          <h2>No summarized stories yet</h2>
-          <p>The local pipeline may still be working. Check back after the first refresh finishes.</p>
+          <h2>No stories yet</h2>
+          <p>The local pipeline may still be fetching headlines. Check back after the first refresh finishes.</p>
         </section>
       )}
 
       {!loading && !error && articles.length > 0 && (
         <section className="story-list" aria-label="Headlines">
-          {articles.map((article) => (
+          {articles.map((article) => article.summary_status === 'pending' ? (
+            <article className="story-card story-card-pending" key={article.id}>
+              <StoryCardContent article={article} />
+              <p className="summary-pending">Summary in progress</p>
+              <a href={article.url} target="_blank" rel="noopener noreferrer">
+                Read original at {article.source} <span aria-hidden="true">↗</span>
+              </a>
+            </article>
+          ) : (
             <Link
               aria-label={`Open summary: ${article.title}`}
               className="story-card"
@@ -114,13 +137,7 @@ function Feed() {
               key={article.id}
             >
               <article>
-                <div className="story-meta">
-                  <span className="category-badge">{article.category}</span>
-                  <span>{article.source}</span>
-                  <span aria-hidden="true">·</span>
-                  <time dateTime={article.published_at ?? undefined}>{formatRelativeTime(article.published_at)}</time>
-                </div>
-                <h2>{article.title}</h2>
+                <StoryCardContent article={article} />
                 <span className="story-action">Open summary <span aria-hidden="true">→</span></span>
               </article>
             </Link>

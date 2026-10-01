@@ -8,6 +8,7 @@ dependencies = [
     "fastapi",
     "feedparser",
     "ollama",
+    "psycopg[binary]",
     "trafilatura",
     "uvicorn[standard]",
 ]

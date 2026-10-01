@@ -17,6 +17,7 @@ from app import db  # noqa: E402
 
 TEMP_DIR = tempfile.TemporaryDirectory()
 db.DB_PATH = Path(TEMP_DIR.name) / "news.db"
+db.DATABASE_URL = None
 db.init_db()
 
 with db.get_conn() as conn:
@@ -60,6 +61,20 @@ with db.get_conn() as conn:
                 "World facts.",
                 "World impact.",
             ),
+        ),
+    )
+    conn.execute(
+        """
+        INSERT INTO articles (
+            id, feed_id, url, title, source, category, published_at, fetched_at,
+            raw_excerpt, summary_status
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')
+        """,
+        (
+            3, feed_id, "https://example.com/pending-story",
+            "Technology story awaiting a summary", "Pending Source", "Tech",
+            "2026-07-07T10:00:00+00:00", "2026-07-07T10:00:00+00:00",
+            "Private pending excerpt",
         ),
     )
 

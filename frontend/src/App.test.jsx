@@ -43,6 +43,7 @@ describe('news application flow', () => {
           category: 'Tech',
           published_at: '2026-07-06T10:00:00Z',
           url: 'https://example.com/tech',
+          summary_status: 'done',
         }])
       }
       if (request.pathname === '/api/articles/7') {

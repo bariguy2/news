@@ -11,6 +11,11 @@ test('onboarding leads to a filtered feed, detail, and source link', async ({ pa
   await expect(page).toHaveURL(/\/feed$/)
   await expect(page.getByRole('heading', { name: 'Your briefing' })).toBeVisible()
   await expect(page.getByText('Browser-tested technology story')).toBeVisible()
+  await expect(page.getByText('Technology story awaiting a summary')).toBeVisible()
+  await expect(page.getByText('Summary in progress')).toBeVisible()
+  await expect(page.getByRole('link', { name: /Read original at Pending Source/ })).toHaveAttribute('href', 'https://example.com/pending-story')
+  await expect(page.getByRole('link', { name: /Open summary: Technology story awaiting a summary/ })).toHaveCount(0)
+  await page.screenshot({ path: 'test-results/news-feed-pending.png', fullPage: true })
   await expect(page.getByText('Filtered world story')).not.toBeVisible()
 
   await page.getByRole('link', { name: /Browser-tested technology story/ }).click()
