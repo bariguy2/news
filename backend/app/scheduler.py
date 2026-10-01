@@ -15,7 +15,7 @@ from app.config import (
     RECENCY_WINDOW_HOURS,
     REFRESH_INTERVAL_MINUTES,
 )
-from app.db import get_conn
+from app.db import DatabaseConnection, get_conn
 from app.ingest.extract import extract_full_text
 from app.ingest.rss import fetch_all_feeds
 from app.summarize.ollama_client import Summary, summarize_text
@@ -43,7 +43,7 @@ def _utc_now() -> datetime:
     return datetime.now(UTC)
 
 
-def _selected_categories(conn: sqlite3.Connection) -> list[str]:
+def _selected_categories(conn: DatabaseConnection) -> list[str]:
     row = conn.execute(
         "SELECT selected_categories FROM preferences WHERE id = 1"
     ).fetchone()
@@ -94,7 +94,7 @@ def _process_article(article: dict[str, object]) -> ArticleResult:
     )
 
 
-def _save_article_result(conn: sqlite3.Connection, result: ArticleResult) -> bool:
+def _save_article_result(conn: DatabaseConnection, result: ArticleResult) -> bool:
     if result.summary is None:
         conn.execute(
             """
@@ -134,7 +134,7 @@ def _save_article_result(conn: sqlite3.Connection, result: ArticleResult) -> boo
 
 def _submit_article(
     executor: ThreadPoolExecutor,
-    article: sqlite3.Row,
+    article: dict[str, object] | sqlite3.Row,
 ) -> Future[ArticleResult]:
     return executor.submit(_process_article, dict(article))
 

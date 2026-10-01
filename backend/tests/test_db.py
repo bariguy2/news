@@ -15,10 +15,28 @@ class DatabaseTests(unittest.TestCase):
         self.db_path = Path(self.temp_dir.name) / "nested" / "news.db"
         self.db_path_patch = patch.object(db, "DB_PATH", self.db_path)
         self.db_path_patch.start()
+        self.database_url_patch = patch.object(db, "DATABASE_URL", None)
+        self.database_url_patch.start()
 
     def tearDown(self) -> None:
+        self.database_url_patch.stop()
         self.db_path_patch.stop()
         self.temp_dir.cleanup()
+
+    def test_context_closes_connection_and_rolls_back_errors(self) -> None:
+        db.init_db()
+        with db.get_conn() as conn:
+            conn.execute("UPDATE preferences SET onboarded = 1")
+        with self.assertRaises(sqlite3.ProgrammingError):
+            conn.execute("SELECT 1")
+        with self.assertRaisesRegex(ValueError, "abort"):
+            with db.get_conn() as conn:
+                conn.execute("UPDATE preferences SET onboarded = 0")
+                raise ValueError("abort")
+        with self.assertRaises(sqlite3.ProgrammingError):
+            conn.execute("SELECT 1")
+        with db.get_conn() as conn:
+            self.assertEqual(conn.execute("SELECT onboarded FROM preferences").fetchone()[0], 1)
 
     def test_init_db_creates_schema_indexes_and_seed_rows(self) -> None:
         db.init_db()
@@ -136,6 +154,59 @@ class DatabaseTests(unittest.TestCase):
                 )
 
         self.assertEqual((0, "pending"), tuple(article))
+
+
+class PostgresDatabaseTests(unittest.TestCase):
+    def test_connection_uses_ssl_private_schema_and_named_rows(self) -> None:
+        raw_connection = MagicMock()
+        with (
+            patch.object(
+                db, "DATABASE_URL", "postgresql://user:password@localhost/postgres"
+            ),
+            patch.object(db.psycopg, "connect", return_value=raw_connection) as connect,
+        ):
+            connection = db.get_conn()
+            cursor = connection.execute("SELECT id FROM articles WHERE id = ?", (7,))
+            connection.commit()
+
+        self.assertIs(cursor, raw_connection.execute.return_value)
+        self.assertEqual("require", connect.call_args.kwargs["sslmode"])
+        self.assertEqual("10", connect.call_args.kwargs["connect_timeout"])
+        self.assertIs(db.dict_row, connect.call_args.kwargs["row_factory"])
+        raw_connection.execute.assert_any_call("SET search_path TO news, public")
+        raw_connection.execute.assert_any_call(
+            "SELECT id FROM articles WHERE id = %s", (7,)
+        )
+        raw_connection.commit.assert_called_once_with()
+
+    def test_failed_schema_selection_closes_connection(self) -> None:
+        raw_connection = MagicMock()
+        raw_connection.execute.side_effect = RuntimeError("schema unavailable")
+        with (
+            patch.object(
+                db, "DATABASE_URL", "postgresql://user:password@localhost/postgres"
+            ),
+            patch.object(db.psycopg, "connect", return_value=raw_connection),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "schema unavailable"):
+                db.get_conn()
+        raw_connection.close.assert_called_once_with()
+
+    def test_postgres_initialization_uses_private_schema_and_seeds(self) -> None:
+        connection = MagicMock()
+        connection.__enter__.return_value = connection
+        with (
+            patch.object(db, "DATABASE_URL", "postgresql://localhost/postgres"),
+            patch.object(db, "get_conn", return_value=connection),
+        ):
+            db.init_db()
+
+        queries = [call.args[0] for call in connection.execute.call_args_list]
+        self.assertTrue(any("CREATE SCHEMA IF NOT EXISTS news" in query for query in queries))
+        self.assertTrue(any("CREATE TABLE IF NOT EXISTS news.articles" in query for query in queries))
+        self.assertEqual(3, sum("ENABLE ROW LEVEL SECURITY" in query for query in queries))
+        self.assertEqual(len(db.STARTER_FEEDS), sum("INSERT INTO feeds" in query for query in queries))
+        self.assertTrue(any("ON CONFLICT(id) DO NOTHING" in query for query in queries))
 
 
 class StartupTests(unittest.TestCase):

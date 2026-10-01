@@ -21,6 +21,8 @@ class PipelineTests(unittest.TestCase):
         self.db_path = Path(self.temp_dir.name) / "news.db"
         self.db_path_patch = patch.object(db, "DB_PATH", self.db_path)
         self.db_path_patch.start()
+        self.database_url_patch = patch.object(db, "DATABASE_URL", None)
+        self.database_url_patch.start()
         self.now_patch = patch("app.scheduler._utc_now", return_value=NOW)
         self.now_patch.start()
         db.init_db()
@@ -34,6 +36,7 @@ class PipelineTests(unittest.TestCase):
             self.assertFalse(scheduler_module._pipeline_running)
             scheduler_module._pipeline_rerun_requested = False
         self.now_patch.stop()
+        self.database_url_patch.stop()
         self.db_path_patch.stop()
         self.temp_dir.cleanup()
 

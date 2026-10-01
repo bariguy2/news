@@ -1,7 +1,7 @@
 """Single-user preference API routes."""
 
 import json
-import sqlite3
+from collections.abc import Mapping
 
 from fastapi import APIRouter, BackgroundTasks
 from pydantic import BaseModel
@@ -21,7 +21,7 @@ class PreferencesResponse(PreferencesUpdate):
     onboarded: bool
 
 
-def _preferences_response(row: sqlite3.Row) -> dict[str, object]:
+def _preferences_response(row: Mapping[str, object]) -> dict[str, object]:
     return {
         "onboarded": bool(row["onboarded"]),
         "selected_categories": json.loads(row["selected_categories"]),

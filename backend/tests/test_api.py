@@ -16,6 +16,8 @@ class ApiTests(unittest.TestCase):
         self.db_path = Path(self.temp_dir.name) / "news.db"
         self.db_path_patch = patch.object(db, "DB_PATH", self.db_path)
         self.db_path_patch.start()
+        self.database_url_patch = patch.object(db, "DATABASE_URL", None)
+        self.database_url_patch.start()
         db.init_db()
 
         self.scheduler = MagicMock()
@@ -29,6 +31,7 @@ class ApiTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.client.__exit__(None, None, None)
         self.scheduler_patch.stop()
+        self.database_url_patch.stop()
         self.db_path_patch.stop()
         self.temp_dir.cleanup()
 
@@ -92,32 +95,49 @@ class ApiTests(unittest.TestCase):
             category="Business",
             published_at="2026-07-04T12:00:00+00:00",
         )
-        self.insert_article(
+        pending_id = self.insert_article(
             "pending",
             category="Tech",
             published_at="2026-07-05T12:00:00+00:00",
             status="pending",
+        )
+        self.insert_article(
+            "failed", category="Tech", published_at="2026-07-06T12:00:00+00:00", status="failed"
         )
 
         response = self.client.get("/api/articles")
 
         self.assertEqual(200, response.status_code)
         articles = response.json()
-        self.assertEqual([business_id, tech_id, world_id], [item["id"] for item in articles])
+        self.assertEqual([pending_id, business_id, tech_id, world_id], [item["id"] for item in articles])
         self.assertEqual(
-            {"id", "title", "source", "category", "published_at", "url"},
+            {"id", "title", "source", "category", "published_at", "url", "summary_status"},
             set(articles[0]),
         )
-        self.assertNotIn("summary_facts", articles[0])
-        self.assertNotIn("summary_impact", articles[0])
-        self.assertNotIn("extracted_text", articles[0])
+        self.assertEqual(["pending", "done", "done", "done"], [item["summary_status"] for item in articles])
+        for article in articles:
+            self.assertNotIn("summary_facts", article)
+            self.assertNotIn("summary_impact", article)
+            self.assertNotIn("extracted_text", article)
+            self.assertNotIn("raw_excerpt", article)
 
         filtered = self.client.get(
             "/api/articles",
             params={"category": " Tech, World,Tech ", "limit": 1},
         )
         self.assertEqual(200, filtered.status_code)
-        self.assertEqual([tech_id], [item["id"] for item in filtered.json()])
+        self.assertEqual([pending_id], [item["id"] for item in filtered.json()])
+
+        with db.get_conn() as conn:
+            conn.execute(
+                "UPDATE articles SET summary_status = 'done' WHERE id = ?",
+                (pending_id,),
+            )
+        completed = self.client.get(
+            "/api/articles", params={"category": "Tech", "limit": 1}
+        ).json()[0]
+        self.assertEqual(pending_id, completed["id"])
+        self.assertEqual("done", completed["summary_status"])
 
         invalid_limit = self.client.get("/api/articles", params={"limit": 0})
         self.assertEqual(422, invalid_limit.status_code)

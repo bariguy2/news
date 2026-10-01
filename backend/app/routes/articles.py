@@ -1,5 +1,7 @@
 """Article and category API routes."""
 
+from typing import Literal
+
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
@@ -16,9 +18,16 @@ class ArticleListItem(BaseModel):
     category: str
     published_at: str | None
     url: str
+    summary_status: Literal["pending", "done"]
 
 
-class ArticleDetail(ArticleListItem):
+class ArticleDetail(BaseModel):
+    id: int
+    title: str
+    source: str
+    category: str
+    published_at: str | None
+    url: str
     summary_facts: str
     summary_impact: str
 
@@ -28,11 +37,11 @@ def list_articles(
     category: str | None = None,
     limit: int = Query(default=50, ge=1),
 ) -> list[dict[str, object]]:
-    """Return summarized article metadata, optionally filtered by category."""
+    """Return pending and summarized headline metadata, optionally filtered."""
     categories = list(
         dict.fromkeys(part.strip() for part in (category or "").split(",") if part.strip())
     )
-    where = ["summary_status = 'done'"]
+    where = ["summary_status IN ('pending', 'done')"]
     parameters: list[object] = []
     if categories:
         placeholders = ", ".join("?" for _ in categories)
@@ -43,7 +52,7 @@ def list_articles(
     with get_conn() as conn:
         rows = conn.execute(
             f"""
-            SELECT id, title, source, category, published_at, url
+            SELECT id, title, source, category, published_at, url, summary_status
             FROM articles
             WHERE {' AND '.join(where)}
             ORDER BY published_at DESC, id DESC

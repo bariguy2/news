@@ -6,6 +6,7 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DB_PATH = PROJECT_ROOT / "data" / "news.db"
+DATABASE_URL = os.environ.get("DATABASE_URL")
 MODEL_NAME = "llama3.1:8b"
 REFRESH_INTERVAL_MINUTES = 30
 RECENCY_WINDOW_HOURS = 48

@@ -4,18 +4,18 @@
 > development. Features, schema, and APIs may change, and it is not intended for
 > production use.
 
-A single-user news briefing that runs on your Mac. It collects a curated set of
+A single-user news briefing that runs locally on Windows or macOS. It collects a curated set of
 RSS feeds, extracts article text, creates local FACTS and IMPACT summaries with
 Ollama, and serves a category-filtered React interface.
 
 ## Prerequisites
 
-- macOS with Homebrew
+- Windows (PowerShell), or macOS with Homebrew
 - Python 3.12 managed by `uv`
 - Node.js and npm
 - Ollama with `llama3.1:8b`
 
-Install the local tools and model:
+On macOS, install the local tools and model:
 
 ```sh
 brew install uv ollama
@@ -34,6 +34,42 @@ cp .env.example .env
 ```
 
 ## Quick start
+
+### Windows (PowerShell)
+
+This PC has Python 3.12 managed by uv, the locked backend/frontend dependencies,
+and Ollama installed. Open a new terminal after installation to refresh PATH.
+For future dependency installs, run `uv sync --locked` in `backend` and
+`npm.cmd ci` in `frontend`. Copy `frontend/.env.example` to `frontend/.env`
+if the latter does not exist.
+
+Run these commands in three separate PowerShell terminals from the repository root:
+
+```powershell
+# Terminal 1 (only if the Ollama desktop app is not already serving)
+& "$env:LOCALAPPDATA\Programs\Ollama\ollama.exe" serve
+
+# Terminal 2
+cd backend
+.\.venv\Scripts\python.exe -m uvicorn app.main:app --reload --port 8000
+
+# Terminal 3
+cd frontend
+npm.cmd run dev
+```
+
+Open [http://localhost:5173](http://localhost:5173). Stop each terminal's server
+with Ctrl+C when finished. The existing `scripts/start.sh` and
+`scripts/reset-feed.sh` are macOS/POSIX launchers; use the commands above on
+Windows. WSL, Docker, Homebrew, and a separate SQLite installation are not
+needed for this workflow.
+
+Windows checks: run `.\.venv\Scripts\python.exe -m unittest discover -s tests -v`
+from `backend`; run `npm.cmd test`, `npm.cmd run build`, and
+`npm.cmd run test:e2e` from `frontend`. The browser test uses installed Chrome
+on either platform; `PLAYWRIGHT_CHROME_PATH` can override its location.
+
+### macOS
 
 Launch the complete app in the background from the repository root:
 
@@ -94,14 +130,40 @@ minutes. Before onboarding it has no selected categories and does no feed work.
 Saving preferences triggers an immediate refresh that ingests only the selected
 categories and only stories from the latest 48 hours. Up to three recent
 articles are extracted and summarized concurrently with the local 8B model,
-newest first. The feed polls while this work runs, so completed summaries appear
-without a browser reload. A manual refresh can also be queued with:
+newest first. Fetched headlines appear with "Summary in progress" before their
+FACTS and IMPACT are ready; they link to the original article while waiting.
+The feed polls every five seconds while any summary is pending, then every
+fifteen seconds once summaries are complete. A manual refresh can also be queued with:
 
 ```sh
 curl -X POST http://localhost:8000/api/refresh
 ```
 
-Runtime data stays in `data/news.db` and is not committed.
+By default, runtime data stays in the ignored `data/news.db`. To store it in
+Supabase Postgres, create a Supabase project and copy its **Session pooler**
+connection URI from the project's Connect panel into an ignored `backend/.env`
+file as `DATABASE_URL=...`. Use the URI exactly as supplied by Supabase, with
+your database password filled in; keep it out of `frontend/.env`, Git, and chat.
+The backend uses TLS by default. The Session pooler is the suitable option for
+this persistent FastAPI process when a direct IPv6 connection is unavailable.
+The transaction pooler is not supported because the backend selects a private
+schema for each connection.
+
+On Windows, copy `backend/.env.example` to `backend/.env`, replace the commented
+placeholder with the real URI, and start the API from `backend/` with:
+
+```powershell
+.\.venv\Scripts\python.exe -m uvicorn app.main:app --reload --port 8000 --env-file .env
+```
+
+On macOS, add `--env-file .env` to the manual Uvicorn command from `backend/`;
+the POSIX launcher continues to use the process environment. Restart the API
+after changing the file. The frontend and
+Ollama commands do not change. FastAPI initializes the private `news` schema,
+its tables, RLS, and starter feeds on first connection. A new Supabase database starts
+with empty articles and onboarding preferences; existing SQLite articles are not
+automatically copied. The local database remains available when `DATABASE_URL`
+is absent. Keep the database URI on the backend only.
 
 ## Verify
 

@@ -63,9 +63,12 @@ class FeedIngestionTests(unittest.TestCase):
         self.db_path = Path(self.temp_dir.name) / "news.db"
         self.db_path_patch = patch.object(db, "DB_PATH", self.db_path)
         self.db_path_patch.start()
+        self.database_url_patch = patch.object(db, "DATABASE_URL", None)
+        self.database_url_patch.start()
         db.init_db()
 
     def tearDown(self) -> None:
+        self.database_url_patch.stop()
         self.db_path_patch.stop()
         self.temp_dir.cleanup()
 
