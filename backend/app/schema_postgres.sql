@@ -22,7 +22,7 @@ CREATE TABLE IF NOT EXISTS news.articles (
     extraction_ok INTEGER NOT NULL DEFAULT 0,
     summary_facts TEXT,
     summary_impact TEXT,
-    summary_status TEXT NOT NULL DEFAULT 'pending'
+    summary_status TEXT NOT NULL DEFAULT 'pending' -- unrequested|pending|done|failed
 );
 
 CREATE INDEX IF NOT EXISTS idx_articles_published ON news.articles(published_at DESC);

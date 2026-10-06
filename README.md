@@ -129,15 +129,22 @@ The scheduler runs immediately when the backend starts and then every 30
 minutes. Before onboarding it has no selected categories and does no feed work.
 Saving preferences triggers an immediate refresh that ingests only the selected
 categories and only stories from the latest 48 hours. Up to three recent
-articles are extracted and summarized concurrently with the local 8B model,
-newest first. Fetched headlines appear with "Summary in progress" before their
-FACTS and IMPACT are ready; they link to the original article while waiting.
-The feed polls every five seconds while any summary is pending, then every
-fifteen seconds once summaries are complete. A manual refresh can also be queued with:
+articles are extracted and summarized concurrently with the local 8B model.
+Each fetch automatically queues only its four newest new stories. Other
+headlines ask whether you want an AI summary: choose **Summarize** on an
+article to queue it, or follow its original-source link. Untouched stories
+remain waiting across refreshes and restarts. Failed summaries show a
+**Retry summary** button. Existing queued summaries resume after restart.
+The feed polls every five seconds while empty or while a summary is pending,
+and every fifteen seconds otherwise. A manual refresh can also be queued with:
 
 ```sh
 curl -X POST http://localhost:8000/api/refresh
 ```
+
+To request one summary through the API, use
+`POST /api/articles/{id}/summarize`. Repeated requests reuse queued or completed
+work. This processes queued articles without refetching feeds.
 
 By default, runtime data stays in the ignored `data/news.db`. To store it in
 Supabase Postgres, create a Supabase project and copy its **Session pooler**

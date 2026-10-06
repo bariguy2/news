@@ -77,12 +77,29 @@ with db.get_conn() as conn:
             "Private pending excerpt",
         ),
     )
+    conn.execute(
+        """
+        INSERT INTO articles (
+            id, feed_id, url, title, source, category, published_at, fetched_at,
+            raw_excerpt, summary_status
+        ) VALUES (4, ?, 'https://example.com/choose-story',
+            'Technology story you can choose', 'Choice Source', 'Tech',
+            '2026-07-08T10:00:00+00:00', '2026-07-08T10:00:00+00:00',
+            'Private choice excerpt', 'unrequested')
+        """,
+        (feed_id,),
+    )
 
 from app.main import app  # noqa: E402
 from app.routes import preferences as preferences_routes  # noqa: E402
+import app.scheduler as pipeline  # noqa: E402
 
 
 preferences_routes.run_pipeline = lambda: None
+# Exercise the real request route, coordinator, database writes and polling,
+# while keeping external extraction/model calls deterministic for browser CI.
+pipeline.extract_full_text = lambda url: ("Isolated article text", True)
+pipeline.summarize_text = lambda text: ("Requested facts are ready.", "Requested impact is ready.")
 
 
 @asynccontextmanager

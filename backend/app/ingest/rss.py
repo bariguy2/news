@@ -149,8 +149,9 @@ def fetch_all_feeds(
                     category,
                     published_at,
                     fetched_at,
-                    raw_excerpt
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    raw_excerpt,
+                    summary_status
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'unrequested')
                 ON CONFLICT(url) DO NOTHING
                 RETURNING id
                 """,

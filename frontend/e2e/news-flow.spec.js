@@ -18,6 +18,17 @@ test('onboarding leads to a filtered feed, detail, and source link', async ({ pa
   await page.screenshot({ path: 'test-results/news-feed-pending.png', fullPage: true })
   await expect(page.getByText('Filtered world story')).not.toBeVisible()
 
+  const choice = page.getByRole('button', { name: 'Summarize: Technology story you can choose' })
+  await expect(choice).toBeVisible()
+  await expect(page.getByRole('link', { name: 'Open summary: Technology story you can choose' })).toHaveCount(0)
+  await choice.click()
+  await page.getByRole('link', { name: 'Open summary: Technology story you can choose' }).click()
+  await expect(page.getByText('Requested facts are ready.')).toBeVisible()
+  await expect(page.getByText('Requested impact is ready.')).toBeVisible()
+  await page.goto('/feed')
+  await expect(page.getByRole('link', { name: 'Open summary: Technology story you can choose' })).toBeVisible()
+  await page.screenshot({ path: 'test-results/news-feed-choice.png', fullPage: true })
+
   await page.getByRole('link', { name: /Browser-tested technology story/ }).click()
 
   await expect(page).toHaveURL(/\/article\/1$/)
