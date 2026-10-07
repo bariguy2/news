@@ -123,9 +123,21 @@ setup-node v7.0.0, setup-uv v10.2.0 and upload-artifact v7.0.2 after the first r
 reported deprecated action runtimes. Ubuntu 24.04 is explicit to avoid a pending
 `ubuntu-latest` image migration. The revised workflow passes actionlint.
 
-Done: workflow implementation and local verification. In progress: verify the
-revised workflow's four jobs on real GitHub runners. This extends MVP step 11's
-verification workflow without adding application hosting or deployment.
+Hosted verification: commit `583d4d7` completed all four jobs successfully in
+GitHub run `37672890581`
+(`https://github.com/bariguy2/news/actions/runs/37672890581`). Logs confirm 53
+backend tests, eight frontend tests, 29 transformed production modules and one
+passing Chrome E2E test using Google Chrome 154.0.8037.57. The uploaded
+`chrome-e2e-results` artifact was confirmed present (524,373 bytes, unexpired).
+The cancelled first run reached a terminal cancelled state and its CLI watcher
+exited; the revised run watcher exited successfully. No local service or test
+process remains from CI setup.
+
+Done: workflow implementation, local validation and real GitHub execution with
+all four jobs passing. Next: merge the CI change into `main` through the normal
+PR workflow; an administrator can optionally require the four checks before
+merging. This extends MVP step 11's verification workflow without adding
+application hosting or deployment.
 
 ### Selective AI summaries (2026-10-05)
 
