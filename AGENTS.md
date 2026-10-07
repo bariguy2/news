@@ -62,10 +62,10 @@ The system uses:
   and Playwright exercises the complete flow in local Chrome against isolated
   real API data.
 - CI: `.github/workflows/ci.yml` defines separate Backend tests, Frontend tests,
-  Production build and Chrome E2E jobs on Ubuntu, triggered by every branch
+  Production build and Chrome E2E jobs on Ubuntu 24.04, triggered by every branch
   push, PR creation/update/reopening and manual workflow dispatch. Actions are
   pinned to verified official commit SHAs. It uses locked dependencies,
-  Python 3.12, Node 22, uv 0.12.17 and explicitly installed Google Chrome.
+  Python 3.12, Node 22, uv 0.12.17 and the runner's Google Chrome installation.
   Tests need no Supabase credentials or running Ollama service.
 
 The implemented data flow is:
@@ -97,8 +97,9 @@ proposed merge. Pushes to an open PR can create both push and PR runs.
 The workflow has read-only contents permissions, finite job timeouts, locked
 dependency installs and explicitly empty `DATABASE_URL`. It uses isolated
 SQLite and controlled model/extraction responses; live Ollama and Supabase
-checks remain separate. Chrome is installed with Playwright's
-`npx playwright install --with-deps chrome`. Playwright's CI configuration
+checks remain separate. The official Ubuntu 24.04 runner image includes Google
+Chrome; CI verifies it with `google-chrome --version` before running the actual
+Chrome flow. Playwright's CI configuration
 uses one worker, rejects focused tests, emits list/HTML reports and retains
 failure traces/screenshots. The browser job saves `chrome-e2e-results` for seven
 days, including generated screenshots. README explains commit/PR logs,
@@ -114,9 +115,17 @@ The local E2E command exited normally; no test Chrome/API/Vite process remained,
 and ports 8000, 5173, 11434, 18000 and 15173 were verified closed. No application
 database was used or altered by these checks.
 
-Done: workflow implementation and local verification. In progress: publish the
-workflow and verify all four jobs on real GitHub runners. This extends MVP
-step 11's verification workflow without adding application hosting or deployment.
+The first GitHub run passed backend tests, frontend tests and production build,
+but its redundant Chrome/dependency installation spent several minutes without
+finishing. That run was cancelled and the workflow switched to the preinstalled
+runner Chrome. Official action pins were also updated to checkout v7.0.1,
+setup-node v7.0.0, setup-uv v10.2.0 and upload-artifact v7.0.2 after the first run
+reported deprecated action runtimes. Ubuntu 24.04 is explicit to avoid a pending
+`ubuntu-latest` image migration. The revised workflow passes actionlint.
+
+Done: workflow implementation and local verification. In progress: verify the
+revised workflow's four jobs on real GitHub runners. This extends MVP step 11's
+verification workflow without adding application hosting or deployment.
 
 ### Selective AI summaries (2026-10-05)
 
