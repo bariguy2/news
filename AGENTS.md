@@ -61,6 +61,12 @@ The system uses:
   Vitest covers component behavior
   and Playwright exercises the complete flow in local Chrome against isolated
   real API data.
+- CI: `.github/workflows/ci.yml` defines separate Backend tests, Frontend tests,
+  Production build and Chrome E2E jobs on Ubuntu, triggered by every branch
+  push, PR creation/update/reopening and manual workflow dispatch. Actions are
+  pinned to verified official commit SHAs. It uses locked dependencies,
+  Python 3.12, Node 22, uv 0.12.17 and explicitly installed Google Chrome.
+  Tests need no Supabase credentials or running Ollama service.
 
 The implemented data flow is:
 
@@ -77,6 +83,40 @@ Important invariants:
 - Keep the REST API client-agnostic for later mobile reuse.
 
 ## Current status
+
+### GitHub Actions CI (2026-10-07)
+
+The user requested shared automatic verification for every pushed commit and
+PR. `.github/workflows/ci.yml` adds four independent checks: Backend tests
+(unit/API/pipeline tests and compileall), Frontend tests (Vitest), Production
+build (Vite) and Chrome E2E. Branch pushes have no branch/path filters, PRs use
+the default opened/synchronize/reopened events, and `workflow_dispatch` allows
+manual reruns. Local commits trigger CI when pushed; PR checks test GitHub's
+proposed merge. Pushes to an open PR can create both push and PR runs.
+
+The workflow has read-only contents permissions, finite job timeouts, locked
+dependency installs and explicitly empty `DATABASE_URL`. It uses isolated
+SQLite and controlled model/extraction responses; live Ollama and Supabase
+checks remain separate. Chrome is installed with Playwright's
+`npx playwright install --with-deps chrome`. Playwright's CI configuration
+uses one worker, rejects focused tests, emits list/HTML reports and retains
+failure traces/screenshots. The browser job saves `chrome-e2e-results` for seven
+days, including generated screenshots. README explains commit/PR logs,
+artifacts and how an administrator can require the checks before merging.
+Branch protection is not configured by this workflow.
+
+Local verification: the 53 backend tests and compileall pass; frontend tests
+in CI mode pass all eight tests; the production build passes with 29 modules;
+Chrome E2E in CI mode passes on ports 18000/15173 and generates its report.
+Official actionlint v1.7.12 was downloaded to an ignored runtime directory,
+verified against the release SHA256 checksums, and reports no workflow errors.
+The local E2E command exited normally; no test Chrome/API/Vite process remained,
+and ports 8000, 5173, 11434, 18000 and 15173 were verified closed. No application
+database was used or altered by these checks.
+
+Done: workflow implementation and local verification. In progress: publish the
+workflow and verify all four jobs on real GitHub runners. This extends MVP
+step 11's verification workflow without adding application hosting or deployment.
 
 ### Selective AI summaries (2026-10-05)
 
@@ -153,7 +193,9 @@ backend tree was stopped and port 8000 verified closed, 11 Supabase articles
 were deleted and onboarding/categories cleared in one committed transaction,
 then FastAPI was restarted. The API confirmed zero articles, empty categories
 and `onboarded=false`; Vite returned HTTP 200 and Ollama's configured model was
-available. These review services are intentionally left running for the user.
+available. After review, the user requested shutdown: all ten tracked backend,
+frontend, Ollama/model and console processes were stopped, their ports verified
+closed, and `.run/windows-dev.json` removed.
 
 Done: selective summaries and verification. Next: try the four-story batch and
 per-article choice in normal use. The older physical stop-Ollama-mid-pipeline

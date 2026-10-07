@@ -201,3 +201,30 @@ npm run test:e2e
 If Chrome is installed elsewhere, set `PLAYWRIGHT_CHROME_PATH` to its executable
 before running the browser test. When ports 8000 or 5173 are already occupied,
 set `NEWS_E2E_BACKEND_PORT` and `NEWS_E2E_FRONTEND_PORT` to unused ports.
+
+## Automated checks on GitHub
+
+`.github/workflows/ci.yml` runs on every branch push, on pull request creation,
+updates and reopening, and through the Actions tab's **Run workflow** button.
+Local commits trigger it after they are pushed. It reports four separate checks:
+
+- **Backend tests**: locked Python 3.12 dependencies, unit/API/pipeline tests,
+  and Python compilation.
+- **Frontend tests**: locked npm dependencies and Vitest.
+- **Production build**: the Vite production build.
+- **Chrome E2E**: isolated FastAPI/Vite servers and the real Google Chrome flow.
+
+Open a commit's checks, a PR's **Checks** tab, or the repository's **Actions** tab
+to see the tested commit and each job's logs. The browser job uploads
+`chrome-e2e-results` for seven days, including its HTML report, screenshots and
+failure traces when available. Pushes to an open PR can produce both a push run
+and a PR run; the PR run checks the proposed merge with the base branch.
+
+CI uses temporary SQLite data and controlled external-service responses. It
+needs no `.env` files, Supabase credentials or local Ollama service. Live model
+and hosted-database checks remain separate integration checks. A concise PR
+test plan can reference the CI results and describe any manual checks.
+
+To prevent merges when CI fails, a repository administrator can configure
+protection for `main` to require these four checks. The workflow itself reports
+results; it does not configure branch protection.
