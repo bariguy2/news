@@ -41,6 +41,7 @@ class ArticleDetail(BaseModel):
 def list_articles(
     category: str | None = None,
     limit: int = Query(default=50, ge=1),
+    q: str | None = Query(default=None, max_length=200),
 ) -> list[dict[str, object]]:
     """Return headlines and their summary state, optionally filtered."""
     categories = list(
@@ -52,6 +53,15 @@ def list_articles(
         placeholders = ", ".join("?" for _ in categories)
         where.append(f"category IN ({placeholders})")
         parameters.extend(categories)
+    search = (q or "").strip()
+    if search:
+        # Treat wildcard characters as literal user input on both databases.
+        pattern = "%" + search.replace("!", "!!").replace("%", "!%").replace("_", "!_") + "%"
+        fields = ("title", "source", "category", "raw_excerpt", "summary_facts", "summary_impact")
+        where.append("(" + " OR ".join(
+            f"LOWER(COALESCE({field}, '')) LIKE LOWER(?) ESCAPE '!'" for field in fields
+        ) + ")")
+        parameters.extend([pattern] * len(fields))
     parameters.append(limit)
 
     with get_conn() as conn:

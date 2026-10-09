@@ -293,6 +293,44 @@ h1 {
   font-weight: 700;
 }
 
+.feed-search {
+  margin-bottom: 2rem;
+}
+
+.feed-search label {
+  display: block;
+  margin-bottom: 0.6rem;
+  font-weight: 700;
+}
+
+.search-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+}
+
+.search-controls input {
+  flex: 1 1 15rem;
+  min-width: 0;
+  width: 100%;
+  padding: 0.85rem 1rem;
+  border: 1px solid var(--line);
+  border-radius: 0.75rem;
+  color: var(--ink);
+  background: var(--paper);
+}
+
+.search-controls input:focus-visible {
+  outline: 3px solid rgb(184 71 43 / 35%);
+  outline-offset: 2px;
+}
+
+.feed-search p {
+  margin: 0.65rem 0 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
 .story-card-pending {
   border-style: dashed;
 }

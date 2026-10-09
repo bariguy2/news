@@ -145,6 +145,35 @@ class ApiTests(unittest.TestCase):
         invalid_limit = self.client.get("/api/articles", params={"limit": 0})
         self.assertEqual(422, invalid_limit.status_code)
 
+    def test_search_matches_stored_fields_and_respects_categories_and_privacy(self) -> None:
+        matching = []
+        for field in ("title", "source", "category", "raw_excerpt", "summary_facts", "summary_impact"):
+            article_id = self.insert_article(field, category="Tech", published_at=None, status="unrequested")
+            with db.get_conn() as conn:
+                conn.execute(f"UPDATE articles SET {field} = ? WHERE id = ?", ("Quantum discovery", article_id))
+            matching.append(article_id)
+        self.insert_article("other", category="World", published_at=None)
+        self.assertEqual(list(reversed(matching)), [row["id"] for row in self.client.get(
+            "/api/articles", params={"q": "  QUANTUM  "}
+        ).json()])
+        response = self.client.get("/api/articles", params={"q": "quantum", "category": "Tech"})
+        self.assertEqual(5, len(response.json()))
+        for row in response.json():
+            self.assertEqual({"id", "title", "source", "category", "published_at", "url", "summary_status"}, set(row))
+        self.assertEqual([], self.client.get("/api/articles", params={"q": "Private extracted"}).json())
+        self.assertEqual([], self.client.get("/api/articles", params={"q": "' OR 1=1 --"}).json())
+        self.assertEqual(7, len(self.client.get("/api/articles", params={"q": "  "}).json()))
+        self.assertEqual(422, self.client.get("/api/articles", params={"q": "a" * 201}).status_code)
+
+    def test_search_filters_before_limit_and_treats_wildcards_literally(self) -> None:
+        old_id = self.insert_article("100%_!", category="Tech", published_at="2026-07-01")
+        for index in range(51):
+            self.insert_article(f"newer-{index}", category="Tech", published_at="2026-07-02")
+        for query in ("100%_!", "%", "_", "!"):
+            response = self.client.get("/api/articles", params={"q": query, "limit": 1})
+            self.assertEqual(200, response.status_code)
+            self.assertEqual([old_id], [row["id"] for row in response.json()])
+
     def test_article_detail_has_exact_public_fields_and_hides_full_text(self) -> None:
         article_id = self.insert_article(
             "detail", category="Science", published_at="2026-07-02T12:00:00+00:00"
