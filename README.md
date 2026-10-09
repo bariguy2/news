@@ -155,6 +155,18 @@ Search does not fetch new articles or request AI summaries. The API accepts
 existing 50-result limit, so matches outside the latest 50 stories can appear.
 Extracted full article text is not searched or returned.
 
+Article cards show a **Read** badge and a softer headline color after you open
+their summary or use the feed's original-source link (including middle-click).
+Here, Read means opened; the app does not measure reading completion. Opening
+a summary directly also records it. The first-open timestamp is stored in the
+selected database and survives refreshes and restarts. Existing articles start
+unread. If saving fails, the article remains usable and offers a retry message.
+`POST /api/articles/{id}/read` records the first open idempotently; headline and
+detail responses include nullable `read_at`. Startup adds this column to
+existing SQLite and PostgreSQL tables without clearing articles or preferences.
+This is still a single-user app: the read state is shared by clients using the
+same database and is removed when its article is purged or the feed is reset.
+
 By default, runtime data stays in the ignored `data/news.db`. To store it in
 Supabase Postgres, create a Supabase project and copy its **Session pooler**
 connection URI from the project's Connect panel into an ignored `backend/.env`

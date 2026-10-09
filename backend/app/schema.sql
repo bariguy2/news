@@ -20,7 +20,8 @@ CREATE TABLE IF NOT EXISTS articles (
     extraction_ok INTEGER NOT NULL DEFAULT 0,
     summary_facts TEXT,
     summary_impact TEXT,
-    summary_status TEXT NOT NULL DEFAULT 'pending'  -- unrequested|pending|done|failed
+    summary_status TEXT NOT NULL DEFAULT 'pending',  -- unrequested|pending|done|failed
+    read_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_articles_published ON articles(published_at DESC);
 CREATE INDEX IF NOT EXISTS idx_articles_category ON articles(category);

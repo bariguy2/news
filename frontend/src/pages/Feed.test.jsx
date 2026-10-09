@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { getArticles, getPreferences, requestSummary } from '../api.js'
+import { getArticles, getPreferences, requestSummary, markArticleRead } from '../api.js'
 import Feed, { EMPTY_FEED_POLL_MS, POPULATED_FEED_POLL_MS } from './Feed.jsx'
 
 
@@ -9,6 +9,7 @@ vi.mock('../api.js', () => ({
   getArticles: vi.fn(),
   getPreferences: vi.fn(),
   requestSummary: vi.fn(),
+  markArticleRead: vi.fn(),
 }))
 
 
@@ -174,6 +175,36 @@ describe('feed polling', () => {
     expect(screen.queryByText('Stale result')).not.toBeInTheDocument()
     expect(screen.getByRole('heading', { name: 'No matching stories' })).toBeVisible()
     expect(getArticles).toHaveBeenLastCalledWith(['Tech'], 'new')
+  })
+
+  it('marks original-source opens as read and preserves the badge during polling', async () => {
+    const article = { id: 30, title: 'Original-only story', source: 'Tech Source', category: 'Tech',
+      published_at: null, url: 'https://example.com/original', summary_status: 'unrequested', read_at: null }
+    getArticles.mockReset().mockResolvedValue([article])
+    markArticleRead.mockResolvedValue({ read_at: '2026-10-09T12:00:00Z' })
+    render(<MemoryRouter><Feed /></MemoryRouter>)
+    await act(async () => {})
+    expect(screen.queryByText('Read', { exact: true })).not.toBeInTheDocument()
+    await act(async () => { fireEvent.click(screen.getByRole('link', { name: /Read original/ })) })
+    expect(markArticleRead).toHaveBeenCalledWith(30)
+    expect(screen.getByText('Read', { exact: true })).toBeVisible()
+    expect(screen.getByRole('button', { name: 'Summarize: Original-only story' })).toBeVisible()
+    await act(async () => { await vi.advanceTimersByTimeAsync(POPULATED_FEED_POLL_MS) })
+    expect(screen.getByText('Read', { exact: true })).toBeVisible()
+  })
+
+  it('does not claim an article is read when saving fails and offers retry', async () => {
+    getArticles.mockReset().mockResolvedValue([{ id: 31, title: 'Offline story', source: 'Tech Source', category: 'Tech',
+      published_at: null, url: 'https://example.com/offline', summary_status: 'pending' }])
+    markArticleRead.mockRejectedValueOnce(new Error('Offline')).mockResolvedValue({ read_at: '2026-10-09T12:00:00Z' })
+    render(<MemoryRouter><Feed /></MemoryRouter>)
+    await act(async () => {})
+    await act(async () => { fireEvent.click(screen.getByRole('link', { name: /Read original/ })) })
+    expect(screen.getByRole('alert')).toHaveTextContent('Could not save read status')
+    expect(screen.queryByText('Read', { exact: true })).not.toBeInTheDocument()
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Retry saving read status' })) })
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(screen.getByText('Read', { exact: true })).toBeVisible()
   })
 
   it('serializes a requested refresh with an already running poll', async () => {

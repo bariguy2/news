@@ -49,3 +49,8 @@ export function getArticle(articleId) {
 export function requestSummary(articleId) {
   return apiFetch(`/api/articles/${articleId}/summarize`, { method: 'POST' })
 }
+
+
+export function markArticleRead(articleId) {
+  return apiFetch(`/api/articles/${articleId}/read`, { method: 'POST', keepalive: true })
+}

@@ -94,6 +94,22 @@ class DatabaseTests(unittest.TestCase):
         self.assertEqual(len(db.STARTER_FEEDS), feed_count)
         self.assertEqual(('["Tech"]', 1), tuple(preference))
 
+    def test_existing_database_migrates_without_losing_articles_or_read_status(self) -> None:
+        self.db_path.parent.mkdir(parents=True)
+        with sqlite3.connect(self.db_path, factory=db.ClosingConnection) as conn:
+            conn.executescript(db.SCHEMA_PATH.read_text().replace(
+                "summary_status TEXT NOT NULL DEFAULT 'pending',", "summary_status TEXT NOT NULL DEFAULT 'pending'"
+            ).replace('    read_at TEXT\n', ''))
+            conn.execute("INSERT INTO feeds (id, name, url, category) VALUES (99, 'Legacy', 'https://example.com/feed', 'Tech')")
+            conn.execute("INSERT INTO articles (feed_id, url, title, source, category, fetched_at) VALUES (99, 'https://example.com/legacy', 'Legacy', 'Source', 'Tech', 'now')")
+        db.init_db()
+        with db.get_conn() as conn:
+            self.assertIsNone(conn.execute("SELECT read_at FROM articles").fetchone()[0])
+            conn.execute("UPDATE articles SET read_at = '2026-10-09T12:00:00+00:00'")
+        db.init_db()
+        with db.get_conn() as conn:
+            self.assertEqual(('Legacy', '2026-10-09T12:00:00+00:00'), tuple(conn.execute("SELECT title, read_at FROM articles").fetchone()))
+
     def test_declared_uniqueness_single_row_and_foreign_key_constraints(self) -> None:
         db.init_db()
 
@@ -204,6 +220,7 @@ class PostgresDatabaseTests(unittest.TestCase):
         queries = [call.args[0] for call in connection.execute.call_args_list]
         self.assertTrue(any("CREATE SCHEMA IF NOT EXISTS news" in query for query in queries))
         self.assertTrue(any("CREATE TABLE IF NOT EXISTS news.articles" in query for query in queries))
+        self.assertTrue(any("ADD COLUMN IF NOT EXISTS read_at" in query for query in queries))
         self.assertEqual(3, sum("ENABLE ROW LEVEL SECURITY" in query for query in queries))
         self.assertEqual(len(db.STARTER_FEEDS), sum("INSERT INTO feeds" in query for query in queries))
         self.assertTrue(any("ON CONFLICT(id) DO NOTHING" in query for query in queries))

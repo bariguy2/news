@@ -84,6 +84,68 @@ Important invariants:
 
 ## Current status
 
+### Read article indicators (2026-10-09)
+
+The user requested a visible indication of articles already opened/read. This
+extends MVP schema/API/feed/detail steps with nullable `articles.read_at` (UTC
+ISO-8601 text) and `POST /api/articles/{id}/read`. An atomic `UPDATE` with
+`COALESCE` and `RETURNING` preserves the first open and leaves summary state
+unchanged. Unknown IDs return 404. Both list and completed detail responses
+include `read_at` while retaining their private-field boundaries. This remains
+single-user shared database state, not authentication or per-user tracking.
+
+Both fresh schemas include the column. Existing SQLite databases are migrated
+after inspecting `PRAGMA table_info`; PostgreSQL uses `ADD COLUMN IF NOT EXISTS`.
+Startup initialization remains idempotent and preserves existing data; older
+articles start unread. The configured running Supabase database now has the
+column. No new dependency or historical read-state backfill is added.
+
+The feed shows Read beside category/source metadata and uses a softer headline
+color. A successfully loaded summary (including direct navigation) records an
+open via POST; GET itself has no read-state side effects. Normal and middle
+clicks on a feed original-source link also record it without delaying link
+navigation. Read means opened, not measured reading completion; browser
+context-menu opens cannot be detected by the app. Only successful writes show
+the badge, failures offer an inline retry, and saved state survives polling,
+search, refresh and restart. Feed-local confirmed timestamps prevent an older
+poll response from hiding a just-saved badge. Normal article expiry/reset also
+removes read history. README documents these semantics.
+
+Verified on Windows:
+- Backend `.venv/Scripts/python.exe -m unittest discover -s tests -q`: 57 tests
+  pass. Coverage includes unread defaults, all four summary states, first-open
+  idempotency, search/list/detail visibility, missing IDs, and existing SQLite
+  migration with article/read-state preservation across repeat initialization.
+  `.venv/Scripts/python.exe -m compileall -q app tests` passes.
+- Frontend `npm.cmd test`: 15 tests pass, including direct detail opens, no
+  write for unavailable/already-read details, failed-write retries, and original
+  opens retaining the badge during polling. `npm.cmd run build` passes with
+  29 transformed modules.
+- `NEWS_E2E_BACKEND_PORT=18000`, `NEWS_E2E_FRONTEND_PORT=15173`,
+  `npm.cmd run test:e2e`: real isolated API/SQLite/Chrome flow passes original
+  new-tab opens, pending read state without starting summaries, detail read
+  marking, reload persistence, and existing onboarding/search/summary flow.
+  `frontend/test-results/news-read-mobile.png` was visually inspected at 390 px:
+  Read badges and softer headlines remain legible and fit the card metadata.
+- Supabase initialization ran twice successfully; a temporary transaction
+  exercised the real read/list route functions with PostgreSQL, confirming
+  first-open idempotency, unchanged unrequested state and list visibility.
+  Probe writes were rolled back and zero probe rows confirmed afterward.
+  Live development API responses expose read_at. The probe script was removed.
+
+The first migration test passed its assertions but failed Windows cleanup due
+to a plain SQLite connection left open. The fixture now uses ClosingConnection;
+the full suite passed and the old temporary database was removed. The first
+extended E2E placed its pending original-source check after the real summary
+coordinator completed that fixture. Moving the check before summarization
+resolved it; the rerun passed. Both browser commands exited and final inspection
+found no E2E browser/server processes or listeners on ports 18000/15173.
+User-requested development services remain running with their tracked roots in
+`.run/windows-dev.json`; Vite returns HTTP 200 and the backend serves the new
+fields after automatic reload. Done: read indicators and verification. After
+user review, the user requested commit/push on `dev-hjc`. Hosted CI results for
+this change are not yet recorded here.
+
 ### Keyword article search (2026-10-09)
 
 The user requested a search bar for fetched articles. This extends MVP steps 7
