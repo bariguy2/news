@@ -2,10 +2,11 @@
 
 from typing import Literal
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
 from pydantic import BaseModel
 
 from app.db import get_conn
+from app.scheduler import run_requested_summaries
 
 
 router = APIRouter(prefix="/api", tags=["articles"])
@@ -18,6 +19,10 @@ class ArticleListItem(BaseModel):
     category: str
     published_at: str | None
     url: str
+    summary_status: Literal["unrequested", "pending", "done", "failed"]
+
+
+class SummaryRequest(BaseModel):
     summary_status: Literal["pending", "done"]
 
 
@@ -37,11 +42,11 @@ def list_articles(
     category: str | None = None,
     limit: int = Query(default=50, ge=1),
 ) -> list[dict[str, object]]:
-    """Return pending and summarized headline metadata, optionally filtered."""
+    """Return headlines and their summary state, optionally filtered."""
     categories = list(
         dict.fromkeys(part.strip() for part in (category or "").split(",") if part.strip())
     )
-    where = ["summary_status IN ('pending', 'done')"]
+    where = ["summary_status IN ('unrequested', 'pending', 'done', 'failed')"]
     parameters: list[object] = []
     if categories:
         placeholders = ", ".join("?" for _ in categories)
@@ -62,6 +67,28 @@ def list_articles(
         ).fetchall()
 
     return [dict(row) for row in rows]
+
+
+@router.post("/articles/{article_id}/summarize", response_model=SummaryRequest)
+def request_summary(article_id: int, background_tasks: BackgroundTasks) -> dict[str, str]:
+    """Atomically queue an article once; completed summaries are reused."""
+    with get_conn() as conn:
+        queued = conn.execute(
+            """
+            UPDATE articles SET summary_status = 'pending'
+            WHERE id = ? AND summary_status IN ('unrequested', 'failed')
+            RETURNING id
+            """,
+            (article_id,),
+        ).fetchone()
+        row = conn.execute(
+            "SELECT summary_status FROM articles WHERE id = ?", (article_id,)
+        ).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Article not found")
+    if queued is not None:
+        background_tasks.add_task(run_requested_summaries)
+    return {"summary_status": row["summary_status"]}
 
 
 @router.get("/articles/{article_id}", response_model=ArticleDetail)

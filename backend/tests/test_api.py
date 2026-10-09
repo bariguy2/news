@@ -101,20 +101,23 @@ class ApiTests(unittest.TestCase):
             published_at="2026-07-05T12:00:00+00:00",
             status="pending",
         )
-        self.insert_article(
+        failed_id = self.insert_article(
             "failed", category="Tech", published_at="2026-07-06T12:00:00+00:00", status="failed"
+        )
+        unrequested_id = self.insert_article(
+            "unrequested", category="Tech", published_at="2026-07-07T12:00:00+00:00", status="unrequested"
         )
 
         response = self.client.get("/api/articles")
 
         self.assertEqual(200, response.status_code)
         articles = response.json()
-        self.assertEqual([pending_id, business_id, tech_id, world_id], [item["id"] for item in articles])
+        self.assertEqual([unrequested_id, failed_id, pending_id, business_id, tech_id, world_id], [item["id"] for item in articles])
         self.assertEqual(
             {"id", "title", "source", "category", "published_at", "url", "summary_status"},
             set(articles[0]),
         )
-        self.assertEqual(["pending", "done", "done", "done"], [item["summary_status"] for item in articles])
+        self.assertEqual(["unrequested", "failed", "pending", "done", "done", "done"], [item["summary_status"] for item in articles])
         for article in articles:
             self.assertNotIn("summary_facts", article)
             self.assertNotIn("summary_impact", article)
@@ -126,7 +129,7 @@ class ApiTests(unittest.TestCase):
             params={"category": " Tech, World,Tech ", "limit": 1},
         )
         self.assertEqual(200, filtered.status_code)
-        self.assertEqual([pending_id], [item["id"] for item in filtered.json()])
+        self.assertEqual([unrequested_id], [item["id"] for item in filtered.json()])
 
         with db.get_conn() as conn:
             conn.execute(
@@ -134,8 +137,8 @@ class ApiTests(unittest.TestCase):
                 (pending_id,),
             )
         completed = self.client.get(
-            "/api/articles", params={"category": "Tech", "limit": 1}
-        ).json()[0]
+            "/api/articles", params={"category": "Tech"}
+        ).json()[2]
         self.assertEqual(pending_id, completed["id"])
         self.assertEqual("done", completed["summary_status"])
 
@@ -203,6 +206,35 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(
             ["Business", "Science", "Sports", "Tech", "World"], response.json()
         )
+
+    def test_summary_requests_are_persisted_idempotent_and_retryable(self) -> None:
+        article_id = self.insert_article(
+            "request", category="Tech", published_at=None, status="unrequested"
+        )
+        with patch("app.routes.articles.run_requested_summaries") as worker:
+            response = self.client.post(f"/api/articles/{article_id}/summarize")
+            self.assertEqual(200, response.status_code)
+            self.assertEqual({"summary_status": "pending"}, response.json())
+            self.client.post(f"/api/articles/{article_id}/summarize")
+            worker.assert_called_once_with()
+        with db.get_conn() as conn:
+            self.assertEqual("pending", conn.execute(
+                "SELECT summary_status FROM articles WHERE id = ?", (article_id,)
+            ).fetchone()[0])
+            conn.execute("UPDATE articles SET summary_status = 'failed' WHERE id = ?", (article_id,))
+        with patch("app.routes.articles.run_requested_summaries") as worker:
+            self.assertEqual({"summary_status": "pending"}, self.client.post(
+                f"/api/articles/{article_id}/summarize"
+            ).json())
+            worker.assert_called_once_with()
+        with db.get_conn() as conn:
+            conn.execute("UPDATE articles SET summary_status = 'done' WHERE id = ?", (article_id,))
+        with patch("app.routes.articles.run_requested_summaries") as worker:
+            self.assertEqual({"summary_status": "done"}, self.client.post(
+                f"/api/articles/{article_id}/summarize"
+            ).json())
+            self.assertEqual(404, self.client.post("/api/articles/999999/summarize").status_code)
+            worker.assert_not_called()
 
     def test_preferences_get_post_and_persist(self) -> None:
         initial = self.client.get("/api/preferences")

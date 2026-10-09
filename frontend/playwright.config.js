@@ -13,9 +13,14 @@ const backendPython = process.platform === 'win32'
 export default defineConfig({
   testDir: './e2e',
   timeout: 30_000,
+  forbidOnly: Boolean(process.env.CI),
+  workers: process.env.CI ? 1 : undefined,
+  reporter: process.env.CI ? [['list'], ['html', { open: 'never' }]] : 'list',
   use: {
     baseURL: frontendURL,
     headless: true,
+    trace: 'retain-on-failure',
+    screenshot: 'only-on-failure',
     ...(process.env.PLAYWRIGHT_CHROME_PATH
       ? { launchOptions: { executablePath: process.env.PLAYWRIGHT_CHROME_PATH } }
       : { channel: 'chrome' }),

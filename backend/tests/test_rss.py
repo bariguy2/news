@@ -102,7 +102,7 @@ class FeedIngestionTests(unittest.TestCase):
         self.assertEqual("2026-07-06T14:30:00+00:00", article["published_at"])
         self.assertEqual("Example excerpt", article["raw_excerpt"])
         self.assertEqual(0, article["extraction_ok"])
-        self.assertEqual("pending", article["summary_status"])
+        self.assertEqual("unrequested", article["summary_status"])
         self.assertIsNotNone(datetime.fromisoformat(article["fetched_at"]).tzinfo)
 
     def test_fetches_only_enabled_feeds(self) -> None:

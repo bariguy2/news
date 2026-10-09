@@ -129,15 +129,22 @@ The scheduler runs immediately when the backend starts and then every 30
 minutes. Before onboarding it has no selected categories and does no feed work.
 Saving preferences triggers an immediate refresh that ingests only the selected
 categories and only stories from the latest 48 hours. Up to three recent
-articles are extracted and summarized concurrently with the local 8B model,
-newest first. Fetched headlines appear with "Summary in progress" before their
-FACTS and IMPACT are ready; they link to the original article while waiting.
-The feed polls every five seconds while any summary is pending, then every
-fifteen seconds once summaries are complete. A manual refresh can also be queued with:
+articles are extracted and summarized concurrently with the local 8B model.
+Each fetch automatically queues only its four newest new stories. Other
+headlines ask whether you want an AI summary: choose **Summarize** on an
+article to queue it, or follow its original-source link. Untouched stories
+remain waiting across refreshes and restarts. Failed summaries show a
+**Retry summary** button. Existing queued summaries resume after restart.
+The feed polls every five seconds while empty or while a summary is pending,
+and every fifteen seconds otherwise. A manual refresh can also be queued with:
 
 ```sh
 curl -X POST http://localhost:8000/api/refresh
 ```
+
+To request one summary through the API, use
+`POST /api/articles/{id}/summarize`. Repeated requests reuse queued or completed
+work. This processes queued articles without refetching feeds.
 
 By default, runtime data stays in the ignored `data/news.db`. To store it in
 Supabase Postgres, create a Supabase project and copy its **Session pooler**
@@ -194,3 +201,30 @@ npm run test:e2e
 If Chrome is installed elsewhere, set `PLAYWRIGHT_CHROME_PATH` to its executable
 before running the browser test. When ports 8000 or 5173 are already occupied,
 set `NEWS_E2E_BACKEND_PORT` and `NEWS_E2E_FRONTEND_PORT` to unused ports.
+
+## Automated checks on GitHub
+
+`.github/workflows/ci.yml` runs on every branch push, on pull request creation,
+updates and reopening, and through the Actions tab's **Run workflow** button.
+Local commits trigger it after they are pushed. It reports four separate checks:
+
+- **Backend tests**: locked Python 3.12 dependencies, unit/API/pipeline tests,
+  and Python compilation.
+- **Frontend tests**: locked npm dependencies and Vitest.
+- **Production build**: the Vite production build.
+- **Chrome E2E**: isolated FastAPI/Vite servers and the real Google Chrome flow.
+
+Open a commit's checks, a PR's **Checks** tab, or the repository's **Actions** tab
+to see the tested commit and each job's logs. The browser job uploads
+`chrome-e2e-results` for seven days, including its HTML report, screenshots and
+failure traces when available. Pushes to an open PR can produce both a push run
+and a PR run; the PR run checks the proposed merge with the base branch.
+
+CI uses temporary SQLite data and controlled external-service responses. It
+needs no `.env` files, Supabase credentials or local Ollama service. Live model
+and hosted-database checks remain separate integration checks. A concise PR
+test plan can reference the CI results and describe any manual checks.
+
+To prevent merges when CI fails, a repository administrator can configure
+protection for `main` to require these four checks. The workflow itself reports
+results; it does not configure branch protection.

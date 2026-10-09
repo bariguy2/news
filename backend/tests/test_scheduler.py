@@ -30,11 +30,13 @@ class PipelineTests(unittest.TestCase):
         with scheduler_module._pipeline_lock:
             scheduler_module._pipeline_running = False
             scheduler_module._pipeline_rerun_requested = False
+            scheduler_module._pipeline_rerun_fetch_requested = False
 
     def tearDown(self) -> None:
         with scheduler_module._pipeline_lock:
             self.assertFalse(scheduler_module._pipeline_running)
             scheduler_module._pipeline_rerun_requested = False
+            scheduler_module._pipeline_rerun_fetch_requested = False
         self.now_patch.stop()
         self.database_url_patch.stop()
         self.db_path_patch.stop()
@@ -386,7 +388,7 @@ class PipelineTests(unittest.TestCase):
         finish_first_cycle = Event()
         observed_categories: list[list[str]] = []
 
-        def cycle() -> None:
+        def cycle(*, fetch_feeds=True) -> None:
             with db.get_conn() as conn:
                 observed_categories.append(
                     scheduler_module._selected_categories(conn)
@@ -411,6 +413,88 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual([["World"], ["Tech"]], observed_categories)
         self.assertTrue(any("rerun queued" in line for line in logs.output))
         self.assertTrue(any("Starting queued" in line for line in logs.output))
+
+    def test_only_four_newest_new_articles_are_automatically_queued(self) -> None:
+        backlog_id = self.insert_article(
+            "https://example.com/backlog", summary_status="unrequested"
+        )
+        new_ids = []
+
+        def ingest(conn, categories, *, now):
+            for index in range(7):
+                # Insert in oldest-to-newest order to prove publication ordering.
+                new_ids.append(self.insert_article(
+                    f"https://example.com/batch-{index}",
+                    summary_status="unrequested",
+                    published_at=NOW - timedelta(minutes=7 - index),
+                ))
+            return new_ids
+
+        with (
+            patch("app.scheduler.fetch_all_feeds", side_effect=ingest),
+            patch("app.scheduler.extract_full_text", return_value=("Text", True)) as extract,
+            patch("app.scheduler.summarize_text", return_value=("Facts", "Impact")),
+        ):
+            run_pipeline()
+        self.assertEqual(4, extract.call_count)
+        with db.get_conn() as conn:
+            states = {row["id"]: row["summary_status"] for row in conn.execute(
+                "SELECT id, summary_status FROM articles"
+            )}
+        self.assertEqual(["unrequested"] * 3 + ["done"] * 4, [states[i] for i in new_ids])
+        self.assertEqual("unrequested", states[backlog_id])
+        # Restart / repeated refresh cannot automatically drain the backlog.
+        with (
+            patch("app.scheduler.fetch_all_feeds", return_value=[]),
+            patch("app.scheduler.extract_full_text") as extract,
+        ):
+            run_pipeline()
+            run_pipeline()
+        extract.assert_not_called()
+
+    def test_requested_summary_runs_without_rss_or_selected_categories(self) -> None:
+        self.set_categories([])
+        queued_id = self.insert_article("https://example.com/requested")
+        untouched_id = self.insert_article(
+            "https://example.com/untouched", summary_status="unrequested"
+        )
+        with (
+            patch("app.scheduler.fetch_all_feeds") as fetch,
+            patch("app.scheduler.extract_full_text", return_value=("Text", True)),
+            patch("app.scheduler.summarize_text", return_value=("Facts", "Impact")),
+        ):
+            scheduler_module.run_requested_summaries()
+        fetch.assert_not_called()
+        with db.get_conn() as conn:
+            states = {row["id"]: row["summary_status"] for row in conn.execute(
+                "SELECT id, summary_status FROM articles"
+            )}
+        self.assertEqual("done", states[queued_id])
+        self.assertEqual("unrequested", states[untouched_id])
+
+    def test_overlap_preserves_a_refresh_when_summary_request_is_also_queued(self) -> None:
+        started = Event()
+        finish = Event()
+        modes = []
+
+        def cycle(*, fetch_feeds=True):
+            modes.append(fetch_feeds)
+            if len(modes) == 1:
+                started.set()
+                self.assertTrue(finish.wait(timeout=3))
+
+        with patch("app.scheduler._run_pipeline_cycle", side_effect=cycle):
+            runner = Thread(target=scheduler_module.run_requested_summaries)
+            runner.start()
+            try:
+                self.assertTrue(started.wait(timeout=3))
+                run_pipeline()
+                scheduler_module.run_requested_summaries()
+            finally:
+                finish.set()
+                runner.join(timeout=3)
+        self.assertFalse(runner.is_alive())
+        self.assertEqual([False, True], modes)
 
 
 class SchedulerConfigurationTests(unittest.TestCase):

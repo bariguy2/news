@@ -310,6 +310,11 @@ h1 {
   font-weight: 700;
 }
 
+.summary-button {
+  display: block;
+  margin-bottom: 0.85rem;
+}
+
 .detail-page {
   width: min(100% - 2rem, 58rem);
 }

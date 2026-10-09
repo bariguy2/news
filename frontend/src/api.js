@@ -43,3 +43,8 @@ export function getArticles(categories = []) {
 export function getArticle(articleId) {
   return apiFetch(`/api/articles/${articleId}`)
 }
+
+
+export function requestSummary(articleId) {
+  return apiFetch(`/api/articles/${articleId}/summarize`, { method: 'POST' })
+}

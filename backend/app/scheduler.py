@@ -11,6 +11,7 @@ from threading import Lock
 from apscheduler.schedulers.background import BackgroundScheduler
 
 from app.config import (
+    AUTO_SUMMARY_LIMIT,
     PIPELINE_CONCURRENCY,
     RECENCY_WINDOW_HOURS,
     REFRESH_INTERVAL_MINUTES,
@@ -27,6 +28,7 @@ PIPELINE_JOB_ID = "news-refresh"
 _pipeline_lock = Lock()
 _pipeline_running = False
 _pipeline_rerun_requested = False
+_pipeline_rerun_fetch_requested = False
 
 
 @dataclass(frozen=True)
@@ -139,7 +141,7 @@ def _submit_article(
     return executor.submit(_process_article, dict(article))
 
 
-def _run_pipeline_cycle() -> None:
+def _run_pipeline_cycle(*, fetch_feeds: bool = True) -> None:
     fetched_count = 0
     summarized_count = 0
     failed_count = 0
@@ -147,7 +149,7 @@ def _run_pipeline_cycle() -> None:
 
     with get_conn() as conn:
         categories = _selected_categories(conn)
-        if not categories:
+        if not categories and fetch_feeds:
             logger.info("Pipeline skipped because no categories are selected")
             return
 
@@ -159,23 +161,42 @@ def _run_pipeline_cycle() -> None:
             WHERE COALESCE(published_at, fetched_at) < ?
             """,
             (cutoff,),
-        ).rowcount
+        ).rowcount if fetch_feeds else 0
         conn.commit()
 
-        new_article_ids = fetch_all_feeds(conn, categories, now=now)
+        new_article_ids = fetch_all_feeds(conn, categories, now=now) if fetch_feeds else []
         fetched_count = len(new_article_ids)
+        if new_article_ids:
+            # Only this fetch's newest headlines get automatic summaries. Never
+            # promote the untouched backlog on later refreshes or restarts.
+            placeholders = ', '.join('?' for _ in new_article_ids)
+            auto_articles = conn.execute(
+                f"""
+                SELECT id FROM articles
+                WHERE id IN ({placeholders}) AND summary_status = 'unrequested'
+                ORDER BY COALESCE(published_at, fetched_at) DESC, id DESC
+                LIMIT ?
+                """,
+                [*new_article_ids, AUTO_SUMMARY_LIMIT],
+            ).fetchall()
+            for article in auto_articles:
+                conn.execute(
+                    "UPDATE articles SET summary_status = 'pending' WHERE id = ?",
+                    (article['id'],),
+                )
         conn.commit()
 
         placeholders = ", ".join("?" for _ in categories)
+        category_filter = f"AND category IN ({placeholders})" if fetch_feeds else ""
         pending_articles = conn.execute(
             f"""
             SELECT id, url, raw_excerpt
             FROM articles
             WHERE summary_status = 'pending'
-              AND category IN ({placeholders})
+              {category_filter}
             ORDER BY COALESCE(published_at, fetched_at) DESC, id DESC
             """,
-            categories,
+            categories if fetch_feeds else [],
         ).fetchall()
 
         article_iterator = iter(pending_articles)
@@ -218,13 +239,14 @@ def _run_pipeline_cycle() -> None:
     )
 
 
-def run_pipeline() -> None:
+def run_pipeline(*, fetch_feeds: bool = True) -> None:
     """Run one pipeline cycle and honor refreshes queued while it is active."""
-    global _pipeline_running, _pipeline_rerun_requested
+    global _pipeline_running, _pipeline_rerun_requested, _pipeline_rerun_fetch_requested
 
     with _pipeline_lock:
         if _pipeline_running:
             _pipeline_rerun_requested = True
+            _pipeline_rerun_fetch_requested |= fetch_feeds
             logger.info("Pipeline rerun queued because another run is active")
             return
         _pipeline_running = True
@@ -232,13 +254,15 @@ def run_pipeline() -> None:
     try:
         while True:
             try:
-                _run_pipeline_cycle()
+                _run_pipeline_cycle(fetch_feeds=fetch_feeds)
             except Exception:
                 logger.exception("Pipeline run failed")
 
             with _pipeline_lock:
                 if _pipeline_rerun_requested:
                     _pipeline_rerun_requested = False
+                    fetch_feeds = _pipeline_rerun_fetch_requested
+                    _pipeline_rerun_fetch_requested = False
                     should_rerun = True
                 else:
                     _pipeline_running = False
@@ -251,6 +275,11 @@ def run_pipeline() -> None:
         with _pipeline_lock:
             _pipeline_running = False
         raise
+
+
+def run_requested_summaries() -> None:
+    """Drain persisted summary requests without fetching RSS again."""
+    run_pipeline(fetch_feeds=False)
 
 
 def create_scheduler() -> BackgroundScheduler:

@@ -1,13 +1,14 @@
-import { act, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { getArticles, getPreferences } from '../api.js'
+import { getArticles, getPreferences, requestSummary } from '../api.js'
 import Feed, { EMPTY_FEED_POLL_MS, POPULATED_FEED_POLL_MS } from './Feed.jsx'
 
 
 vi.mock('../api.js', () => ({
   getArticles: vi.fn(),
   getPreferences: vi.fn(),
+  requestSummary: vi.fn(),
 }))
 
 
@@ -97,5 +98,63 @@ describe('feed polling', () => {
     await act(async () => { await vi.advanceTimersByTimeAsync(EMPTY_FEED_POLL_MS) })
     expect(screen.queryByText('Summary in progress')).not.toBeInTheDocument()
     expect(screen.getByRole('link', { name: `Open summary: ${pending.title}` })).toHaveAttribute('href', '/article/10')
+  })
+
+  it('leaves an untouched headline waiting until its summary is requested', async () => {
+    const article = { id: 11, title: 'Choose this story', source: 'Tech Source', category: 'Tech',
+      published_at: null, url: 'https://example.com/choose', summary_status: 'unrequested' }
+    getArticles.mockReset().mockResolvedValue([article])
+    let acceptRequest
+    requestSummary.mockImplementation(() => new Promise((resolve) => { acceptRequest = resolve }))
+    render(<MemoryRouter><Feed /></MemoryRouter>)
+    await act(async () => {})
+    expect(requestSummary).not.toHaveBeenCalled()
+    expect(screen.getByText('Would you like an AI summary?')).toBeVisible()
+    await act(async () => { await vi.advanceTimersByTimeAsync(EMPTY_FEED_POLL_MS) })
+    expect(getArticles).toHaveBeenCalledTimes(1)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Summarize: Choose this story' }))
+    expect(screen.getByRole('button', { name: 'Summarize: Choose this story' })).toBeDisabled()
+    expect(requestSummary).toHaveBeenCalledExactlyOnceWith(11)
+    getArticles.mockResolvedValue([{ ...article, summary_status: 'pending' }])
+    await act(async () => { acceptRequest({ summary_status: 'pending' }) })
+    expect(screen.getByText('Summary in progress')).toBeVisible()
+    expect(screen.queryByRole('button', { name: 'Summarize: Choose this story' })).not.toBeInTheDocument()
+    getArticles.mockResolvedValue([{ ...article, summary_status: 'done' }])
+    await act(async () => { await vi.advanceTimersByTimeAsync(EMPTY_FEED_POLL_MS) })
+    expect(screen.getByRole('link', { name: 'Open summary: Choose this story' })).toHaveAttribute('href', '/article/11')
+  })
+
+  it('keeps the choice available when the summary request fails', async () => {
+    getArticles.mockReset().mockResolvedValue([{ id: 12, title: 'Retry this story', source: 'Tech Source',
+      category: 'Tech', published_at: null, url: 'https://example.com/retry', summary_status: 'failed' }])
+    requestSummary.mockRejectedValue(new Error('Offline'))
+    render(<MemoryRouter><Feed /></MemoryRouter>)
+    await act(async () => {})
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Retry summary: Retry this story' })) })
+    expect(screen.getByRole('alert')).toHaveTextContent('Could not request a summary')
+    expect(screen.getByRole('button', { name: 'Retry summary: Retry this story' })).toBeEnabled()
+  })
+
+  it('serializes a requested refresh with an already running poll', async () => {
+    const article = { id: 13, title: 'Concurrent request', source: 'Tech Source', category: 'Tech',
+      published_at: null, url: 'https://example.com/concurrent', summary_status: 'unrequested' }
+    let finishPoll
+    getArticles.mockReset().mockResolvedValueOnce([article])
+      .mockImplementationOnce(() => new Promise((resolve) => { finishPoll = resolve }))
+      .mockResolvedValue([{ ...article, summary_status: 'done' }])
+    requestSummary.mockResolvedValue({ summary_status: 'pending' })
+    const { unmount } = render(<MemoryRouter><Feed /></MemoryRouter>)
+    await act(async () => {})
+    await act(async () => { await vi.advanceTimersByTimeAsync(POPULATED_FEED_POLL_MS) })
+    expect(getArticles).toHaveBeenCalledTimes(2)
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Summarize: Concurrent request' })) })
+    expect(getArticles).toHaveBeenCalledTimes(2)
+    await act(async () => { finishPoll([{ ...article, summary_status: 'pending' }]) })
+    expect(getArticles).toHaveBeenCalledTimes(3)
+    expect(screen.getByRole('link', { name: 'Open summary: Concurrent request' })).toBeVisible()
+    unmount()
+    await act(async () => { await vi.runOnlyPendingTimersAsync() })
+    expect(getArticles).toHaveBeenCalledTimes(3)
   })
 })

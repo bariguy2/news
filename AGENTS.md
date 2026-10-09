@@ -45,18 +45,28 @@ The system uses:
 - Scheduling: `backend/app/scheduler.py` configures an immediate APScheduler
   interval job inside the FastAPI lifespan. `POST /api/refresh` queues the same
   pipeline through FastAPI background tasks, as does a successful preference
-  update.
-- REST API: FastAPI exposes pending/completed headline lists and completed details, feed categories,
+  update. Each fetch queues at most four newly inserted stories. Other new
+  headlines remain `unrequested` until the reader requests a summary;
+  `run_requested_summaries()` drains queued work without refetching RSS.
+- REST API: FastAPI exposes unrequested/pending/completed/failed headline lists,
+  completed details, per-article summary requests, feed categories,
   single-user preferences, and manual refresh under `/api`. Pydantic response
   models constrain public article fields, and CORS allows the Vite development
   origin at `http://localhost:5173`.
 - Frontend: React Router provides preference-gated onboarding, a
   category-filtered headline feed, and summary detail routes. Vite reads the API
   origin from `VITE_API_BASE`; the feed polls every five seconds while empty or
-  while any visible summary is pending, and every fifteen seconds once populated
-  with completed summaries. Vitest covers component behavior
+  while any visible summary is pending, and every fifteen seconds otherwise.
+  Cards offer Summarize for untouched stories and Retry summary for failures.
+  Vitest covers component behavior
   and Playwright exercises the complete flow in local Chrome against isolated
   real API data.
+- CI: `.github/workflows/ci.yml` defines separate Backend tests, Frontend tests,
+  Production build and Chrome E2E jobs on Ubuntu 24.04, triggered by every branch
+  push, PR creation/update/reopening and manual workflow dispatch. Actions are
+  pinned to verified official commit SHAs. It uses locked dependencies,
+  Python 3.12, Node 22, uv 0.12.17 and the runner's Google Chrome installation.
+  Tests need no Supabase credentials or running Ollama service.
 
 The implemented data flow is:
 
@@ -73,6 +83,144 @@ Important invariants:
 - Keep the REST API client-agnostic for later mobile reuse.
 
 ## Current status
+
+### GitHub Actions CI (2026-10-07)
+
+The user requested shared automatic verification for every pushed commit and
+PR. `.github/workflows/ci.yml` adds four independent checks: Backend tests
+(unit/API/pipeline tests and compileall), Frontend tests (Vitest), Production
+build (Vite) and Chrome E2E. Branch pushes have no branch/path filters, PRs use
+the default opened/synchronize/reopened events, and `workflow_dispatch` allows
+manual reruns. Local commits trigger CI when pushed; PR checks test GitHub's
+proposed merge. Pushes to an open PR can create both push and PR runs.
+
+The workflow has read-only contents permissions, finite job timeouts, locked
+dependency installs and explicitly empty `DATABASE_URL`. It uses isolated
+SQLite and controlled model/extraction responses; live Ollama and Supabase
+checks remain separate. The official Ubuntu 24.04 runner image includes Google
+Chrome; CI verifies it with `google-chrome --version` before running the actual
+Chrome flow. Playwright's CI configuration
+uses one worker, rejects focused tests, emits list/HTML reports and retains
+failure traces/screenshots. The browser job saves `chrome-e2e-results` for seven
+days, including generated screenshots. README explains commit/PR logs,
+artifacts and how an administrator can require the checks before merging.
+Branch protection is not configured by this workflow.
+
+Local verification: the 53 backend tests and compileall pass; frontend tests
+in CI mode pass all eight tests; the production build passes with 29 modules;
+Chrome E2E in CI mode passes on ports 18000/15173 and generates its report.
+Official actionlint v1.7.12 was downloaded to an ignored runtime directory,
+verified against the release SHA256 checksums, and reports no workflow errors.
+The local E2E command exited normally; no test Chrome/API/Vite process remained,
+and ports 8000, 5173, 11434, 18000 and 15173 were verified closed. No application
+database was used or altered by these checks.
+
+The first GitHub run passed backend tests, frontend tests and production build,
+but its redundant Chrome/dependency installation spent several minutes without
+finishing. That run was cancelled and the workflow switched to the preinstalled
+runner Chrome. Official action pins were also updated to checkout v7.0.1,
+setup-node v7.0.0, setup-uv v10.2.0 and upload-artifact v7.0.2 after the first run
+reported deprecated action runtimes. Ubuntu 24.04 is explicit to avoid a pending
+`ubuntu-latest` image migration. The revised workflow passes actionlint.
+
+Hosted verification: commit `583d4d7` completed all four jobs successfully in
+GitHub run `37672890581`
+(`https://github.com/bariguy2/news/actions/runs/37672890581`). Logs confirm 53
+backend tests, eight frontend tests, 29 transformed production modules and one
+passing Chrome E2E test using Google Chrome 154.0.8037.57. The uploaded
+`chrome-e2e-results` artifact was confirmed present (524,373 bytes, unexpired).
+The cancelled first run reached a terminal cancelled state and its CLI watcher
+exited; the revised run watcher exited successfully. No local service or test
+process remains from CI setup.
+
+Done: workflow implementation, local validation and real GitHub execution with
+all four jobs passing. Next: merge the CI change into `main` through the normal
+PR workflow; an administrator can optionally require the four checks before
+merging. This extends MVP step 11's verification workflow without adding
+application hosting or deployment.
+
+### Selective AI summaries (2026-10-05)
+
+The user requested that only the first three or four fetched articles receive
+automatic summaries, with a per-article choice for the rest. The implementation
+uses four (`AUTO_SUMMARY_LIMIT` in `backend/app/config.py`), selecting the newest
+newly inserted stories across the selected feeds after ingestion finishes.
+RSS explicitly writes `unrequested` stubs. Only that fetch's four selected rows
+become `pending`; old untouched rows remain untouched across refreshes and
+restarts. Existing `pending` rows remain previously queued work and resume as
+before. Existing completed summaries are retained. No schema migration or new
+dependency is needed: both database schemas retain their compatible `pending`
+default and ingestion explicitly supplies the new state.
+
+`POST /api/articles/{id}/summarize` atomically queues an untouched or failed
+article with `UPDATE ... RETURNING`. Duplicate pending/completed requests reuse
+existing work; unknown IDs return 404. The queued state commits before the
+background task runs. The shared coordinator contains failures, commits each
+result and queues overlapping triggers, retaining full-refresh work if a
+summary-only request is also received. On-demand runs drain pending requests
+without fetching feeds or purging again, even when category preferences changed.
+Normal full refreshes retain category scoping and the rolling 48-hour purge.
+
+Headline lists now include all four states and continue to omit summaries,
+excerpts and extracted text. This supersedes the prior failed-row exclusion.
+Detail remains done-only with its existing public fields. Untouched cards ask
+"Would you like an AI summary?" and offer Summarize; pending cards show Summary
+in progress; failed cards offer Retry summary. Request buttons disable during
+submission and show an inline transport error when needed. Original-source
+links remain available. Successful requests immediately refresh the feed;
+empty/pending polling uses five seconds, other populated feeds fifteen seconds.
+`docs/plan_selective_summaries.md` records the user-approved extension to MVP
+steps 6, 7 and 9; README documents the behavior and endpoint.
+
+Verified on Windows:
+- `.venv/Scripts/python.exe -m unittest discover -s tests -v` from backend:
+  53 tests pass, including the four-newest cap, untouched backlog after repeated
+  refresh/restart, duplicate-safe and retryable requests, privacy, concurrent
+  work, and preserving queued refreshes alongside on-demand triggers.
+- `.venv/Scripts/python.exe -m compileall -q app tests`: passes.
+- `npm.cmd test` from frontend: eight tests pass, including choice, disabled
+  submission, request failure, pending-to-done polling, overlapping manual/poll
+  refresh serialization and timer cleanup.
+- `npm.cmd run build`: passes, 29 transformed modules.
+- `NEWS_E2E_BACKEND_PORT=18000` and `NEWS_E2E_FRONTEND_PORT=15173` with
+  `npm.cmd run test:e2e`: the isolated real API/Chrome flow passes onboarding,
+  pending/untouched/completed cards, summary request through the actual
+  coordinator, persisted detail, category filtering and new-tab source link.
+  Its model/extraction boundaries use deterministic fixtures. The pending feed
+  screenshot was visually inspected for the choice button and distinct states.
+- A separate temporary SQLite probe exercised real RSS parsing/deduplication,
+  real trafilatura extraction of a controlled HTML document and real Ollama.
+  Six articles produced four done and two unrequested rows; repeated ingestion
+  preserved them; a real API request completed a fifth and left the sixth
+  untouched. Both saved sections were nonempty (252 FACTS/584 IMPACT characters
+  for the requested story). The temporary database was removed.
+- A Supabase transaction verified newest-four SQL, conditional request and
+  duplicate-safe `RETURNING` behavior. Every probe write was rolled back and
+  zero probe rows were confirmed afterward; no application row was modified.
+
+The first sandboxed backend suite stalled and was terminated; both Python
+processes were verified gone and its command reaped. Vitest's first sandboxed
+run failed before executing tests due to temporary-file rename restrictions.
+Elevated reruns passed. The Chrome E2E command exited normally and its temporary
+API/Vite listeners were absent afterward. The isolated Ollama server PID 46688
+and its descendants were terminated and the parent reaped after the live probe.
+Final inspection found no test model runner or server, and ports 8000, 5173,
+11434, 18000 and 15173 were closed at the end of implementation checks.
+
+For the subsequent user-requested review, Ollama, Vite and a reloading FastAPI
+backend were started using `backend/.env`; root PIDs are tracked in ignored
+`.run/windows-dev.json` and output in `logs/`. At the user's request, the
+backend tree was stopped and port 8000 verified closed, 11 Supabase articles
+were deleted and onboarding/categories cleared in one committed transaction,
+then FastAPI was restarted. The API confirmed zero articles, empty categories
+and `onboarded=false`; Vite returned HTTP 200 and Ollama's configured model was
+available. After review, the user requested shutdown: all ten tracked backend,
+frontend, Ollama/model and console processes were stopped, their ports verified
+closed, and `.run/windows-dev.json` removed.
+
+Done: selective summaries and verification. Next: try the four-story batch and
+per-article choice in normal use. The older physical stop-Ollama-mid-pipeline
+MVP checklist item remains outstanding; these checks do not claim to close it.
 
 ### Supabase database connection (2026-09-30 to 2026-10-01)
 
@@ -141,6 +289,9 @@ restart-safe initialization. Ollama remains local and article summarization
 speed is unchanged. The project has not been deployed publicly.
 
 ### Pending headline visibility (2026-09-30)
+
+Historical verification: the selective-summary section above supersedes this
+section's completed/pending-only list and failed-row exclusion.
 
 The headline list now returns `pending` and `done` articles with a
 `summary_status` field. This deliberately extends the MVP plan's completed-only
@@ -240,7 +391,8 @@ and no parser error. No feed URL or user-agent change was required.
 categories and returns immediately for an empty selection. It isolates feed
 request and HTTP failures, skips entries without a URL or title, converts parsed
 publication times to UTC ISO-8601 strings, rejects entries older than 48 hours,
-and inserts article stub rows with `INSERT OR IGNORE`. Undated feed entries are
+and inserts `unrequested` article stubs with
+`ON CONFLICT(url) DO NOTHING RETURNING id`. Undated feed entries are
 kept as newly observed stories. It returns only newly inserted article IDs and
 leaves transaction control to its caller. Parser errors are logged, while any
 usable entries returned with a partial feed are still considered individually.
@@ -263,9 +415,10 @@ pipeline translates that result to a failed article status.
 
 `run_pipeline()` reads the current selected categories and does no feed work
 before onboarding. Each active cycle purges rows older than 48 hours, commits
-newly ingested stubs, then processes only selected-category rows with
+newly ingested stubs and queues at most four new stories, then processes
+selected-category rows with
 `summary_status='pending'`, newest first. Up to three workers perform extraction
-and Ollama calls without database access; the coordinator owns all SQLite writes
+and Ollama calls without database access; the coordinator owns all database writes
 and commits after each article. Malformed/model-failed summaries are marked
 `failed`; pending rows resume after restart, while `done` and `failed` rows are
 not reprocessed. Expected dependency failures and unexpected per-article
@@ -279,7 +432,8 @@ immediate run and a configurable 30-minute interval, and shuts that scheduler
 down during lifespan cleanup. `POST /api/refresh` returns
 `{"status": "started"}` and schedules `run_pipeline()` as a background task.
 
-The REST surface is now implemented. `GET /api/articles` returns pending and completed
+The REST surface is now implemented. `GET /api/articles` returns unrequested,
+pending, failed and completed
 article headline metadata plus `summary_status`, supports a trimmed comma-separated `category`
 filter and a positive `limit` (default 50), and orders by newest publication
 time. `GET /api/articles/{id}` returns the two summary fields only for completed
@@ -296,8 +450,9 @@ sent to `/onboarding`, where categories come from the API and at least one must
 be selected before preferences are saved. An onboarded user is sent to `/feed`;
 that screen reloads persisted categories, requests the filtered headline list,
 renders source/category/relative-time cards, silently polls every five seconds
-while empty or pending and every fifteen seconds once all visible articles are
-complete. Completed cards link to `/article/:id`; pending cards show status and
+while empty or pending and every fifteen seconds otherwise. Untouched cards
+offer Summarize and failed cards offer Retry summary.
+Completed cards link to `/article/:id`; pending cards show status and
 link to the original source. The detail screen shows FACTS, a visually distinct IMPACT
 section, and an original-source link with `target="_blank"` and
 `rel="noopener noreferrer"`. Loading, empty, API-error, and retry states are
