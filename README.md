@@ -146,6 +146,15 @@ To request one summary through the API, use
 `POST /api/articles/{id}/summarize`. Repeated requests reuse queued or completed
 work. This processes queued articles without refetching feeds.
 
+Use **Search articles** at the top of the feed to find fetched stories in your
+selected categories. Search ignores letter case and matches a literal phrase
+in titles, sources, categories, RSS excerpts, and available FACTS/IMPACT summaries.
+Results update after a short typing pause; **Clear search** restores the feed.
+Search does not fetch new articles or request AI summaries. The API accepts
+`GET /api/articles?category=Tech&q=quantum`; filtering happens before the
+existing 50-result limit, so matches outside the latest 50 stories can appear.
+Extracted full article text is not searched or returned.
+
 By default, runtime data stays in the ignored `data/news.db`. To store it in
 Supabase Postgres, create a Supabase project and copy its **Session pooler**
 connection URI from the project's Connect panel into an ignored `backend/.env`

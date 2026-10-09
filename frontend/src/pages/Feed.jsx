@@ -25,6 +25,8 @@ function StoryCardContent({ article }) {
 
 function Feed() {
   const [articles, setArticles] = useState([])
+  const [search, setSearch] = useState('')
+  const [query, setQuery] = useState('')
   const [categories, setCategories] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -32,6 +34,11 @@ function Feed() {
   const [requesting, setRequesting] = useState({})
   const [requestErrors, setRequestErrors] = useState({})
   const refreshArticles = useRef(() => {})
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setQuery(search.trim()), 300)
+    return () => window.clearTimeout(timer)
+  }, [search])
 
   async function summarizeArticle(article) {
     if (requesting[article.id]) return
@@ -73,7 +80,7 @@ function Feed() {
       }
       loadInProgress = true
       try {
-        const result = await getArticles(selectedCategories)
+        const result = await getArticles(selectedCategories, query)
         if (!active) return
         hasPendingArticles = result.length === 0 || result.some((article) => article.summary_status === 'pending')
         setArticles(result)
@@ -121,7 +128,7 @@ function Feed() {
       refreshArticles.current = () => {}
       if (pollTimer !== null) window.clearTimeout(pollTimer)
     }
-  }, [reloadKey])
+  }, [reloadKey, query])
 
   return (
     <main className="feed-page">
@@ -138,6 +145,19 @@ function Feed() {
         )}
       </header>
 
+      <div className="feed-search" role="search" aria-label="Article search">
+        <label htmlFor="article-search">Search articles</label>
+        <div className="search-controls">
+          <input id="article-search" type="search" maxLength={200}
+            placeholder="Search by keyword…" value={search}
+            aria-describedby="search-help"
+            onChange={(event) => setSearch(event.target.value)} />
+          {search && <button type="button" className="secondary-button"
+            onClick={() => { setSearch(''); setQuery('') }}>Clear search</button>}
+        </div>
+        <p id="search-help">Search fetched stories in your selected categories, including available AI summaries.</p>
+      </div>
+
       {loading && <p className="status-message" aria-live="polite">Loading headlines…</p>}
 
       {!loading && error && (
@@ -151,8 +171,9 @@ function Feed() {
 
       {!loading && !error && articles.length === 0 && (
         <section className="empty-state">
-          <h2>No stories yet</h2>
-          <p>The local pipeline may still be fetching headlines. Check back after the first refresh finishes.</p>
+          <h2>{query ? 'No matching stories' : 'No stories yet'}</h2>
+          <p>{query ? 'Try another keyword or clear your search.'
+            : 'The local pipeline may still be fetching headlines. Check back after the first refresh finishes.'}</p>
         </section>
       )}
 

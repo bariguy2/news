@@ -136,6 +136,46 @@ describe('feed polling', () => {
     expect(screen.getByRole('button', { name: 'Retry summary: Retry this story' })).toBeEnabled()
   })
 
+  it('debounces search, polls the current query, and clears no-match results', async () => {
+    getArticles.mockReset().mockResolvedValue([{ id: 20, title: 'Searchable story', source: 'Tech Source',
+      category: 'Tech', published_at: null, url: 'https://example.com/search', summary_status: 'done' }])
+    render(<MemoryRouter><Feed /></MemoryRouter>)
+    await act(async () => {})
+    const input = screen.getByRole('searchbox', { name: 'Search articles' })
+    fireEvent.change(input, { target: { value: 'no' } })
+    await act(async () => { await vi.advanceTimersByTimeAsync(150) })
+    fireEvent.change(input, { target: { value: '  nonexistent  ' } })
+    getArticles.mockResolvedValue([])
+    await act(async () => { await vi.advanceTimersByTimeAsync(300) })
+    expect(getArticles).toHaveBeenCalledTimes(2)
+    expect(getArticles).toHaveBeenLastCalledWith(['Tech'], 'nonexistent')
+    expect(screen.getByRole('heading', { name: 'No matching stories' })).toBeVisible()
+    await act(async () => { await vi.advanceTimersByTimeAsync(EMPTY_FEED_POLL_MS) })
+    expect(getArticles).toHaveBeenLastCalledWith(['Tech'], 'nonexistent')
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Clear search' })) })
+    expect(input).toHaveValue('')
+    expect(getArticles).toHaveBeenLastCalledWith(['Tech'], '')
+    expect(screen.getByRole('heading', { name: 'No stories yet' })).toBeVisible()
+  })
+
+  it('ignores an older search response after the query changes', async () => {
+    let finishOld
+    getArticles.mockReset().mockResolvedValueOnce([])
+      .mockImplementationOnce(() => new Promise((resolve) => { finishOld = resolve }))
+      .mockResolvedValue([])
+    render(<MemoryRouter><Feed /></MemoryRouter>)
+    await act(async () => {})
+    const input = screen.getByRole('searchbox', { name: 'Search articles' })
+    fireEvent.change(input, { target: { value: 'old' } })
+    await act(async () => { await vi.advanceTimersByTimeAsync(300) })
+    fireEvent.change(input, { target: { value: 'new' } })
+    await act(async () => { await vi.advanceTimersByTimeAsync(300) })
+    await act(async () => { finishOld([{ id: 99, title: 'Stale result', summary_status: 'done' }]) })
+    expect(screen.queryByText('Stale result')).not.toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'No matching stories' })).toBeVisible()
+    expect(getArticles).toHaveBeenLastCalledWith(['Tech'], 'new')
+  })
+
   it('serializes a requested refresh with an already running poll', async () => {
     const article = { id: 13, title: 'Concurrent request', source: 'Tech Source', category: 'Tech',
       published_at: null, url: 'https://example.com/concurrent', summary_status: 'unrequested' }

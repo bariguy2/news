@@ -84,6 +84,58 @@ Important invariants:
 
 ## Current status
 
+### Keyword article search (2026-10-09)
+
+The user requested a search bar for fetched articles. This extends MVP steps 7
+and 9 with optional `q` on `GET /api/articles` (maximum 200 characters).
+Search trims surrounding whitespace, ignores case, and matches a literal phrase
+against title, source, category, RSS excerpt and available FACTS/IMPACT summaries.
+Blank search retains the original feed; category filters and all four summary
+states remain supported. Parameterized SQL escapes `!`, `%` and `_` with an
+explicit escape character on SQLite and PostgreSQL. Filtering precedes ordering
+and the existing result limit. List responses still omit excerpts, summaries
+and extracted text; extracted text is not searched. No schema or dependency
+change, RSS fetch or AI request is needed for searching.
+
+The feed has a labeled search input below its header, a 300 ms typing debounce,
+a Clear search button and a distinct No matching stories state. Polls and
+summary-triggered refreshes retain the active search. Effect cleanup ignores
+responses from older searches and cancels their polling timers. Search uses
+the existing selected-category scope and shows at most 50 matching stories.
+README documents the scope, limit and API query.
+
+Verified on Windows:
+- Backend `.venv/Scripts/python.exe -m unittest discover -s tests -v`: all 55
+  tests pass, including each searchable field, category scoping, trimming/case,
+  literal wildcard punctuation, injection input, response privacy and matching
+  an older article beyond 51 newer nonmatches. `compileall -q app tests` passes.
+- Frontend `npm.cmd test`: all ten tests pass, including debouncing, search
+  polling, no matches, clearing and ignoring a stale response.
+- `npm.cmd run build`: passes with 29 transformed modules.
+- `NEWS_E2E_BACKEND_PORT=18000`, `NEWS_E2E_FRONTEND_PORT=15173`,
+  `npm.cmd run test:e2e`: isolated real API/SQLite/Chrome flow passes search,
+  no-match/clear behavior and the existing onboarding/summary/detail/source flow.
+  A 390-pixel mobile viewport has no horizontal overflow. The generated
+  `frontend/test-results/news-search-mobile.png` was visually inspected: search,
+  Clear search, helper text and matching card fit comfortably.
+- A temporary read-only probe loaded the backend environment privately, tested
+  literal/case-insensitive PostgreSQL matching, and called the actual list route
+  with search/category filters through Supabase. Public shapes passed; no
+  application rows were written or changed. The probe script was removed.
+
+The E2E command exited normally and its API/Vite ports 18000/15173 were closed
+afterward; no development services were started. Done: keyword search and
+verification. After user review, the user requested commit/push on `dev-hjc`
+with message `Search bar for article keyword`. CI runs when pushed; hosted
+results for this change are not yet recorded here.
+
+For user review on 2026-10-09, development services were subsequently started
+and intentionally left running. Hidden Windows process roots are recorded in
+ignored `.run/windows-dev.json` (backend 48900, frontend 45784, Ollama 54560),
+with output in `logs/`. FastAPI loads `backend/.env`; readiness checks confirmed
+five API categories, Vite HTTP 200 at `http://localhost:5173/feed`, and the
+configured `llama3.1:8b` model available through Ollama. No feed reset was requested.
+
 ### GitHub Actions CI (2026-10-07)
 
 The user requested shared automatic verification for every pushed commit and

@@ -31,11 +31,12 @@ export function getCategories() {
 }
 
 
-export function getArticles(categories = []) {
+export function getArticles(categories = [], search = '') {
   const query = new URLSearchParams({ limit: '50' })
   if (categories.length > 0) {
     query.set('category', categories.join(','))
   }
+  if (search.trim()) query.set('q', search.trim())
   return apiFetch(`/api/articles?${query}`)
 }
 
