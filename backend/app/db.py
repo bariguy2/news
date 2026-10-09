@@ -94,6 +94,9 @@ def init_db() -> None:
                     conn.execute(statement)
         else:
             conn.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
+            columns = {row["name"] for row in conn.execute("PRAGMA table_info(articles)")}
+            if "read_at" not in columns:
+                conn.execute("ALTER TABLE articles ADD COLUMN read_at TEXT")
 
         for feed in STARTER_FEEDS:
             conn.execute(

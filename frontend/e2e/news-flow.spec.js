@@ -31,6 +31,20 @@ test('onboarding leads to a filtered feed, detail, and source link', async ({ pa
   await expect(page.getByRole('heading', { name: 'Technology story awaiting a summary' })).toBeVisible()
   await page.setViewportSize({ width: 1280, height: 720 })
 
+  await context.route('https://example.com/pending-story', (route) => route.fulfill({
+    contentType: 'text/html', body: '<h1>Original pending story</h1>',
+  }))
+  const pendingCard = page.locator('.story-card').filter({ has: page.getByRole('heading', { name: 'Technology story awaiting a summary' }) })
+  const pendingPopupPromise = page.waitForEvent('popup')
+  await pendingCard.getByRole('link', { name: /Read original/ }).click()
+  const pendingPopup = await pendingPopupPromise
+  await expect(pendingPopup).toHaveURL('https://example.com/pending-story')
+  await pendingPopup.close()
+  await expect(pendingCard.getByText('Read', { exact: true })).toBeVisible()
+  await page.reload()
+  await expect(pendingCard.getByText('Read', { exact: true })).toBeVisible()
+  await expect(pendingCard.getByText('Summary in progress')).toBeVisible()
+
   const choice = page.getByRole('button', { name: 'Summarize: Technology story you can choose' })
   await expect(choice).toBeVisible()
   await expect(page.getByRole('link', { name: 'Open summary: Technology story you can choose' })).toHaveCount(0)
@@ -38,8 +52,10 @@ test('onboarding leads to a filtered feed, detail, and source link', async ({ pa
   await page.getByRole('link', { name: 'Open summary: Technology story you can choose' }).click()
   await expect(page.getByText('Requested facts are ready.')).toBeVisible()
   await expect(page.getByText('Requested impact is ready.')).toBeVisible()
+  await expect(page.getByText('Read', { exact: true })).toBeVisible()
   await page.goto('/feed')
   await expect(page.getByRole('link', { name: 'Open summary: Technology story you can choose' })).toBeVisible()
+  await expect(page.getByRole('link', { name: 'Open summary: Technology story you can choose' }).getByText('Read', { exact: true })).toBeVisible()
   await page.screenshot({ path: 'test-results/news-feed-choice.png', fullPage: true })
 
   await page.getByRole('link', { name: /Browser-tested technology story/ }).click()
@@ -49,6 +65,7 @@ test('onboarding leads to a filtered feed, detail, and source link', async ({ pa
   await expect(page.getByText('The verified facts are visible in the browser.')).toBeVisible()
   await expect(page.getByRole('heading', { name: 'Why it matters' })).toBeVisible()
   await expect(page.getByText('The impact explanation is visually distinct and available.')).toBeVisible()
+  await expect(page.getByText('Read', { exact: true })).toBeVisible()
 
   const sourceLink = page.getByRole('link', { name: /Read full article at Browser Source/ })
   await expect(sourceLink).toHaveAttribute('href', 'https://example.com/original-story')
@@ -69,4 +86,10 @@ test('onboarding leads to a filtered feed, detail, and source link', async ({ pa
   await page.goto('/')
   await expect(page).toHaveURL(/\/feed$/)
   await expect(page.getByText('Browser-tested technology story')).toBeVisible()
+  const readCard = page.getByRole('link', { name: /Open summary: Browser-tested technology story/ })
+  await expect(readCard.getByText('Read', { exact: true })).toBeVisible()
+  await page.reload()
+  await expect(readCard.getByText('Read', { exact: true })).toBeVisible()
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.screenshot({ path: 'test-results/news-read-mobile.png', fullPage: true })
 })

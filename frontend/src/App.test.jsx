@@ -58,6 +58,9 @@ describe('news application flow', () => {
           summary_impact: 'A grounded explanation of why the event matters.',
         })
       }
+      if (request.pathname === '/api/articles/7/read' && method === 'POST') {
+        return response({ read_at: '2026-10-09T12:00:00Z' })
+      }
       return response({ detail: 'Not found' }, 404)
     }))
   })

@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import { getArticle } from '../api.js'
+import { getArticle, markArticleRead } from '../api.js'
 import { formatRelativeTime } from '../time.js'
 
 
@@ -9,15 +9,43 @@ function Detail() {
   const [article, setArticle] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [readError, setReadError] = useState('')
+  const [savingRead, setSavingRead] = useState(false)
+  const currentId = useRef(id)
+  currentId.current = id
+
+  async function retryRead() {
+    setSavingRead(true)
+    try {
+      const result = await markArticleRead(id)
+      if (currentId.current !== id) return
+      setArticle((previous) => ({ ...previous, read_at: result.read_at }))
+      setReadError('')
+    } catch {
+      if (currentId.current === id) setReadError('Could not save read status.')
+    } finally {
+      if (currentId.current === id) setSavingRead(false)
+    }
+  }
 
   useEffect(() => {
     let active = true
     setLoading(true)
     setError('')
+    setReadError('')
+    setSavingRead(false)
 
     getArticle(id)
       .then((result) => {
-        if (active) setArticle(result)
+        if (!active) return
+        setArticle(result)
+        if (!result.read_at) {
+          markArticleRead(id).then((status) => {
+            if (active) setArticle((previous) => ({ ...previous, read_at: status.read_at }))
+          }).catch(() => {
+            if (active) setReadError('Could not save read status.')
+          })
+        }
       })
       .catch(() => {
         if (active) setError('This summary is not available.')
@@ -59,11 +87,15 @@ function Detail() {
         <header className="detail-header">
           <div className="story-meta">
             <span className="category-badge">{article.category}</span>
+            {article.read_at && <span className="read-badge">Read</span>}
             <span>{article.source}</span>
             <span aria-hidden="true">·</span>
             <time dateTime={article.published_at ?? undefined}>{formatRelativeTime(article.published_at)}</time>
           </div>
           <h1>{article.title}</h1>
+          {readError && <div role="alert"><p>{readError}</p>
+            <button type="button" className="secondary-button" disabled={savingRead} onClick={retryRead}>Retry saving read status</button>
+          </div>}
         </header>
 
         <section className="facts-section" aria-labelledby="facts-title">

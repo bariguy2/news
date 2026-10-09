@@ -1,6 +1,7 @@
 """Article and category API routes."""
 
 from typing import Literal
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
 from pydantic import BaseModel
@@ -20,6 +21,11 @@ class ArticleListItem(BaseModel):
     published_at: str | None
     url: str
     summary_status: Literal["unrequested", "pending", "done", "failed"]
+    read_at: str | None
+
+
+class ReadStatus(BaseModel):
+    read_at: str
 
 
 class SummaryRequest(BaseModel):
@@ -35,6 +41,7 @@ class ArticleDetail(BaseModel):
     url: str
     summary_facts: str
     summary_impact: str
+    read_at: str | None
 
 
 @router.get("/articles", response_model=list[ArticleListItem])
@@ -67,7 +74,7 @@ def list_articles(
     with get_conn() as conn:
         rows = conn.execute(
             f"""
-            SELECT id, title, source, category, published_at, url, summary_status
+            SELECT id, title, source, category, published_at, url, summary_status, read_at
             FROM articles
             WHERE {' AND '.join(where)}
             ORDER BY published_at DESC, id DESC
@@ -77,6 +84,22 @@ def list_articles(
         ).fetchall()
 
     return [dict(row) for row in rows]
+
+
+@router.post("/articles/{article_id}/read", response_model=ReadStatus)
+def mark_article_read(article_id: int) -> dict[str, str]:
+    """Persist the first open time without changing the summary state."""
+    with get_conn() as conn:
+        row = conn.execute(
+            """
+            UPDATE articles SET read_at = COALESCE(read_at, ?)
+            WHERE id = ? RETURNING read_at
+            """,
+            (datetime.now(timezone.utc).isoformat(), article_id),
+        ).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Article not found")
+    return dict(row)
 
 
 @router.post("/articles/{article_id}/summarize", response_model=SummaryRequest)
@@ -108,7 +131,7 @@ def get_article(article_id: int) -> dict[str, object]:
         row = conn.execute(
             """
             SELECT id, title, source, category, published_at, url,
-                   summary_facts, summary_impact
+                   summary_facts, summary_impact, read_at
             FROM articles
             WHERE id = ? AND summary_status = 'done'
             """,

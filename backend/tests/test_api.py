@@ -114,7 +114,7 @@ class ApiTests(unittest.TestCase):
         articles = response.json()
         self.assertEqual([unrequested_id, failed_id, pending_id, business_id, tech_id, world_id], [item["id"] for item in articles])
         self.assertEqual(
-            {"id", "title", "source", "category", "published_at", "url", "summary_status"},
+            {"id", "title", "source", "category", "published_at", "url", "summary_status", "read_at"},
             set(articles[0]),
         )
         self.assertEqual(["unrequested", "failed", "pending", "done", "done", "done"], [item["summary_status"] for item in articles])
@@ -159,7 +159,7 @@ class ApiTests(unittest.TestCase):
         response = self.client.get("/api/articles", params={"q": "quantum", "category": "Tech"})
         self.assertEqual(5, len(response.json()))
         for row in response.json():
-            self.assertEqual({"id", "title", "source", "category", "published_at", "url", "summary_status"}, set(row))
+            self.assertEqual({"id", "title", "source", "category", "published_at", "url", "summary_status", "read_at"}, set(row))
         self.assertEqual([], self.client.get("/api/articles", params={"q": "Private extracted"}).json())
         self.assertEqual([], self.client.get("/api/articles", params={"q": "' OR 1=1 --"}).json())
         self.assertEqual(7, len(self.client.get("/api/articles", params={"q": "  "}).json()))
@@ -193,6 +193,7 @@ class ApiTests(unittest.TestCase):
                 "url",
                 "summary_facts",
                 "summary_impact",
+                "read_at",
             },
             set(article),
         )
@@ -227,6 +228,24 @@ class ApiTests(unittest.TestCase):
                 response = self.client.get(f"/api/articles/{article_id}")
                 self.assertEqual(404, response.status_code)
                 self.assertEqual({"detail": "Article not found"}, response.json())
+
+    def test_read_status_is_persisted_idempotent_and_independent_of_summary(self) -> None:
+        for status in ('unrequested', 'pending', 'failed', 'done'):
+            article_id = self.insert_article(f'read-{status}', category='Tech', published_at=None, status=status)
+            self.assertIsNone(next(row for row in self.client.get('/api/articles').json() if row['id'] == article_id)['read_at'])
+            response = self.client.post(f'/api/articles/{article_id}/read')
+            self.assertEqual(200, response.status_code)
+            self.assertEqual({'read_at'}, set(response.json()))
+            timestamp = response.json()['read_at']
+            self.assertTrue(timestamp.endswith('+00:00'))
+            self.assertEqual(response.json(), self.client.post(f'/api/articles/{article_id}/read').json())
+            db.init_db()
+            row = next(row for row in self.client.get('/api/articles', params={'q': status}).json() if row['id'] == article_id)
+            self.assertEqual(timestamp, row['read_at'])
+            self.assertEqual(status, row['summary_status'])
+            if status == 'done':
+                self.assertEqual(timestamp, self.client.get(f'/api/articles/{article_id}').json()['read_at'])
+        self.assertEqual(404, self.client.post('/api/articles/999999/read').status_code)
 
     def test_categories_are_distinct_and_sorted(self) -> None:
         response = self.client.get("/api/categories")

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { getArticles, getPreferences, requestSummary } from '../api.js'
+import { getArticles, getPreferences, requestSummary, markArticleRead } from '../api.js'
 import { formatRelativeTime } from '../time.js'
 
 
@@ -13,6 +13,7 @@ function StoryCardContent({ article }) {
     <>
       <div className="story-meta">
         <span className="category-badge">{article.category}</span>
+        {article.read_at && <span className="read-badge">Read</span>}
         <span>{article.source}</span>
         <span aria-hidden="true">·</span>
         <time dateTime={article.published_at ?? undefined}>{formatRelativeTime(article.published_at)}</time>
@@ -33,12 +34,27 @@ function Feed() {
   const [reloadKey, setReloadKey] = useState(0)
   const [requesting, setRequesting] = useState({})
   const [requestErrors, setRequestErrors] = useState({})
+  const [readErrors, setReadErrors] = useState({})
+  const savedReads = useRef({})
   const refreshArticles = useRef(() => {})
 
   useEffect(() => {
     const timer = window.setTimeout(() => setQuery(search.trim()), 300)
     return () => window.clearTimeout(timer)
   }, [search])
+
+  async function recordRead(article) {
+    if (article.read_at) return
+    try {
+      const result = await markArticleRead(article.id)
+      savedReads.current[article.id] = result.read_at
+      setArticles((previous) => previous.map((item) => item.id === article.id
+        ? { ...item, read_at: result.read_at } : item))
+      setReadErrors((previous) => ({ ...previous, [article.id]: '' }))
+    } catch {
+      setReadErrors((previous) => ({ ...previous, [article.id]: 'Could not save read status.' }))
+    }
+  }
 
   async function summarizeArticle(article) {
     if (requesting[article.id]) return
@@ -83,7 +99,8 @@ function Feed() {
         const result = await getArticles(selectedCategories, query)
         if (!active) return
         hasPendingArticles = result.length === 0 || result.some((article) => article.summary_status === 'pending')
-        setArticles(result)
+        setArticles(result.map((item) => savedReads.current[item.id]
+          ? { ...item, read_at: savedReads.current[item.id] } : item))
         setError('')
       } catch {
         if (active && initialLoad) {
@@ -180,7 +197,7 @@ function Feed() {
       {!loading && !error && articles.length > 0 && (
         <section className="story-list" aria-label="Headlines">
           {articles.map((article) => article.summary_status !== 'done' ? (
-            <article className="story-card story-card-pending" key={article.id}>
+            <article className={`story-card story-card-pending${article.read_at ? ' story-card-read' : ''}`} key={article.id}>
               <StoryCardContent article={article} />
               <p className="summary-pending" aria-live="polite">
                 {article.summary_status === 'pending' ? 'Summary in progress'
@@ -199,14 +216,19 @@ function Feed() {
                 </button>
               )}
               {requestErrors[article.id] && <p role="alert">{requestErrors[article.id]}</p>}
-              <a href={article.url} target="_blank" rel="noopener noreferrer">
+              <a href={article.url} target="_blank" rel="noopener noreferrer"
+                onClick={() => recordRead(article)}
+                onAuxClick={(event) => { if (event.button === 1) recordRead(article) }}>
                 Read original at {article.source} <span aria-hidden="true">↗</span>
               </a>
+              {readErrors[article.id] && <div role="alert"><p>{readErrors[article.id]}</p>
+                <button type="button" className="secondary-button" onClick={() => recordRead(article)}>Retry saving read status</button>
+              </div>}
             </article>
           ) : (
             <Link
               aria-label={`Open summary: ${article.title}`}
-              className="story-card"
+              className={`story-card${article.read_at ? ' story-card-read' : ''}`}
               to={`/article/${article.id}`}
               key={article.id}
             >
