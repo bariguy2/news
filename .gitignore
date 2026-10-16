@@ -13,6 +13,8 @@ frontend/playwright-report/
 data/*.db
 .run/
 logs/
+# Shared backend credentials supplied without the leading dot
+/env
 .env
 .env.local
 frontend/.env

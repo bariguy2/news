@@ -84,6 +84,130 @@ Important invariants:
 
 ## Current status
 
+### Local work rebased onto updated main (2026-10-09)
+
+`bariguy/new_ai` was rebased from `0096ed9` onto `origin/main` at `27ab794`
+(the remote default branch is `main`, with no remote `master`). The selective
+summaries and CI changes are retained alongside the local environment-file
+protection, database-aware scripts, stop script, tests, and documentation.
+The sole restore conflict was the adjacent status additions in this file;
+both sets of entries were preserved. All 12 pre-rebase changed/new files are
+present; the ten non-document files match the pre-rebase backup byte-for-byte.
+The local work remains uncommitted, with a recovery stash retained. No cleanup
+refactor had been applied before the user's rebase request.
+
+Verification on the combined tree: 58 backend tests pass (two opt-in PostgreSQL
+tests skipped), compileall passes, all eight frontend tests and the Vite build
+pass, and all three shell integration suites pass. Chrome E2E passes on isolated
+ports 18000/15173, including selective summary requests. Test commands exited;
+application/test ports 8000/5173/18000/15173 are closed, and the pre-existing
+Ollama service at PID 48955 is preserved. Both local credential files remain
+present, identical, ignored, and untracked; application data was not reset.
+
+### Stop script (2026-10-09)
+
+Done: executable `scripts/kill.sh` stops the backend and frontend recorded in
+`.run/backend.pid` and `.run/frontend.pid`. It resolves paths from the script
+location, exits silently and successfully when nothing is running, and removes
+stale/invalid PID files. It sends SIGTERM, waits up to five seconds, then uses
+SIGKILL if required and verifies exit before removing each live PID file. It
+attempts both services and returns nonzero if either cannot be stopped. PID 0,
+PID 1, negative values, and malformed values are rejected. Ollama, untracked
+services, logs, configuration, and database contents are left untouched.
+README documents `./scripts/kill.sh` and its launcher-tracked scope.
+
+Verified: `/bin/bash -n scripts/kill.sh tests/test_kill.sh` and
+`/bin/bash tests/test_kill.sh` pass. Coverage includes no runtime directory,
+running/partially running services, repeated no-op, stale/invalid PIDs,
+SIGKILL fallback, and preservation of untracked services and a fake Ollama.
+All test-owned processes were stopped, reaped, and checked; temporary files
+were removed. A separate real launch in an isolated copy with a temporary
+SQLite database served both API and Vite. `kill.sh` stopped backend PID 15449
+and frontend PID 15470, removed their PID files, and closed ports 8000/5173;
+a second run was silent with exit code zero. The temporary copy was removed,
+real application data was untouched, and existing Ollama PID 48955 remains
+running. `git diff --check` passes. No application or test server remains.
+
+### Database-aware scripts (2026-10-09)
+
+Done: `scripts/start.sh` passes `backend/.env` to Uvicorn when present, retaining
+SQLite startup without that file. `scripts/reset-feed.sh` invokes
+`backend/app/reset_feed.py`, which loads the same dotenv file before importing
+database configuration and uses the existing SQLite/PostgreSQL connection helper.
+Exported variables take precedence for both commands. Environment files are
+parsed rather than sourced as shell code; file credentials are not exported to
+Vite or Ollama. Reset deletes articles and clears preferences in one transaction,
+preserves feeds/schema, and reports the selected database type without its URI.
+A failure rolls back and prevents relaunch; a missing local SQLite database
+remains a no-op. Reset now supports Supabase and does not silently reset SQLite
+when PostgreSQL is configured. The success message explains that ingestion waits
+for category selection. README documents these behaviors and the destructive
+scope of a hosted reset. This supersedes the script limitations reviewed below.
+
+Verified: system Bash syntax checks and both shell integration suites pass,
+including absent/present dotenv handling, no shell execution of dotenv values,
+environment precedence, PostgreSQL failure without SQLite fallback, no relaunch
+after failure, and credential-safe reset errors. The backend suite runs 56 tests:
+54 pass and two opt-in PostgreSQL tests skip without `NEWS_TEST_POSTGRES_URL`.
+Both PostgreSQL tests also passed separately on a real connection using only
+connection-local temporary tables and `search_path=pg_temp`; they verify reset,
+repeat reset, and rollback after preference failure. Connection closure removes
+those tables. `compileall` and `git diff --check` pass.
+
+An isolated real-script run copied the app to a temporary directory, used a
+temporary SQLite database and synthetic article, and exercised startup, reset,
+and repeated reset. API categories/preferences/articles, Vite HTTP 200, zero
+article rows, preserved feed seeds, and custom CORS configuration loaded from
+dotenv were verified. Backend/frontend pairs 14742/14765, 14824/14841, and
+14900/14921 were stopped and verified absent; ports 8000/5173 are closed and the
+temporary directory was removed. Shell-test processes/directories were also
+cleaned up. Real application databases were not reset; pre-existing Ollama PID
+48955 was preserved. No application server is left running.
+
+### App shutdown and script review (2026-10-09)
+
+At the user's request, backend PID 13239 and frontend PID 15760 were stopped,
+verified absent, and their `.run/` PID files removed. Ports 8000 and 5173 are
+closed. The pre-existing Ollama service (PID 48955, port 11434) was preserved.
+`/bin/bash -n scripts/start.sh scripts/reset-feed.sh tests/test_start.sh
+tests/test_reset_feed.sh` passed, as did `/bin/bash tests/test_start.sh` and
+`/bin/bash tests/test_reset_feed.sh`. Both suites used temporary fake services;
+reset checks used a temporary SQLite database. Final inspection found no test
+processes or temporary test directories. No real article data was reset.
+
+At review time, the unchanged scripts passed their local SQLite tests but did
+not support the file-based Supabase workflow. Startup ignored `backend/.env`,
+and reset always targeted `data/news.db`. These findings were addressed in the
+database-aware scripts update above.
+
+### Local app launch with shared configuration (2026-10-09)
+
+At the user's request, the app was left running for interactive use at
+`http://localhost:5173`. `uv sync --locked` installed the missing PostgreSQL
+driver in the macOS backend environment. A read-only `SELECT 1` using the
+supplied `backend/.env` succeeded without displaying credentials. The tracked
+old backend PID 15733 was stopped and verified exited, then replaced with PID
+13239 running Uvicorn on 127.0.0.1:8000 with `--env-file .env`; `.run/backend.pid`
+records the replacement and output goes to `logs/backend.log`. Existing Vite
+PID 15760 and Ollama PID 48955 were preserved. API categories and frontend HTTP
+checks passed. Chrome displayed the Business feed and a completed article's
+FACTS, IMPACT, and original-source link. The browser was returned to the feed.
+The requested application services remain running; no temporary test server was
+started. This launch supersedes the untested-connection status below.
+
+### Shared environment file protection (2026-10-08)
+
+Added `/env` to the root `.gitignore` for the shared backend credentials file.
+The existing `.env` rule already covers `backend/.env`. No backend environment
+file existed in this checkout, so the shared file was copied to `backend/.env`
+with owner-only permissions (0600). File equality was verified without printing
+credentials; `git check-ignore -v env backend/.env` confirms both are ignored,
+and `git ls-files -- env backend/.env` confirms neither is tracked.
+`git diff --check` passes. No service was started or restarted, and the supplied
+database connection was not tested. The manual backend command still needs
+`--env-file .env` to load this configuration. At that time the POSIX launcher
+did not load it; the database-aware scripts update above added that support.
+
 ### GitHub Actions CI (2026-10-07)
 
 The user requested shared automatic verification for every pushed commit and
@@ -234,8 +358,8 @@ use PostgreSQL-compatible conflict handling and `RETURNING id` for new article
 rows. The PostgreSQL schema explicitly enables RLS on its three private tables;
 the database-owner connection used by FastAPI remains able to read and write.
 The database URL belongs only in ignored `backend/.env`, loaded by
-Uvicorn's `--env-file` option. The POSIX launcher inherits its environment but
-does not load this file. A Session pooler URI is
+Uvicorn's `--env-file` option. The POSIX launcher now loads this file when present,
+with inherited environment variables taking precedence. A Session pooler URI is
 recommended because the backend uses session-local schema selection. This is
 an explicit storage deviation from `docs/plan_mvp.md`; no cloud deployment,
 authentication, or hosted AI work was added. Existing SQLite articles are not
@@ -468,7 +592,9 @@ and the local ignored `frontend/.env` set
 Ollama with `OLLAMA_NUM_PARALLEL=3` by default only when the service is
 unavailable, then starts non-reloading Uvicorn and direct Vite processes,
 records the application PIDs under `.run/`, and
-writes service output under `logs/`. Re-running it bounces only those tracked
+writes service output under `logs/`. It passes an existing `backend/.env` to
+Uvicorn, preserving exported variable precedence and SQLite fallback when no
+database URL is configured. Re-running it bounces only those tracked
 backend and frontend processes. It polls real HTTP endpoints before reporting
 readiness, tails the relevant log on failure, and refuses to replace untracked
 processes already serving ports 8000 or 5173. The manual three-terminal
@@ -477,7 +603,8 @@ development workflow remains documented alongside it in `README.md`.
 `scripts/reset-feed.sh` provides the destructive clean-slate workflow. It stops
 PID-tracked backend/frontend processes, refuses to delete data while an
 untracked application server is present, atomically deletes every article and
-clears onboarding preferences with `sqlite3`, calls `scripts/start.sh`, and
+clears onboarding preferences in the configured SQLite or PostgreSQL database
+using `app.reset_feed` and the backend connection helper, calls `scripts/start.sh`, and
 posts `/api/refresh`. Because backend startup already schedules an immediate
 pipeline run, the scheduler still wakes during relaunch, but the cleared
 category selection makes both that run and the reset script's manual refresh
