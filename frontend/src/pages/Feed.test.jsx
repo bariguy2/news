@@ -10,6 +10,7 @@ vi.mock('../api.js', () => ({
   getPreferences: vi.fn(),
   requestSummary: vi.fn(),
   markArticleRead: vi.fn(),
+  getArticleProgress: vi.fn(async () => ({ stage: 'queued', percentage: 0, elapsed_seconds: 0, estimated: true })),
 }))
 
 

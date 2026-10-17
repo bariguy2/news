@@ -247,6 +247,22 @@ class ApiTests(unittest.TestCase):
                 self.assertEqual(timestamp, self.client.get(f'/api/articles/{article_id}').json()['read_at'])
         self.assertEqual(404, self.client.post('/api/articles/999999/read').status_code)
 
+    def test_article_progress_endpoint_preserves_privacy_and_authoritative_status(self) -> None:
+        import app.summary_progress as progress_module
+        pending_id = self.insert_article('progress', category='Tech', published_at=None, status='pending')
+        with patch.object(progress_module, '_articles', {}):
+            response = self.client.get(f'/api/articles/{pending_id}/progress')
+            self.assertEqual({'stage': 'queued', 'percentage': 0, 'elapsed_seconds': 0, 'estimated': True}, response.json())
+            progress_module.start_batch([pending_id])
+            progress_module.update_article(pending_id, 'summarizing', 35)
+            response = self.client.get(f'/api/articles/{pending_id}/progress')
+            self.assertEqual({'stage', 'percentage', 'elapsed_seconds', 'estimated'}, set(response.json()))
+            self.assertEqual(35, response.json()['percentage'])
+            with db.get_conn() as conn:
+                conn.execute("UPDATE articles SET summary_status = 'done' WHERE id = ?", (pending_id,))
+            self.assertEqual(100, self.client.get(f'/api/articles/{pending_id}/progress').json()['percentage'])
+        self.assertEqual(404, self.client.get('/api/articles/999999/progress').status_code)
+
     def test_categories_are_distinct_and_sorted(self) -> None:
         response = self.client.get("/api/categories")
 

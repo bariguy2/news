@@ -208,6 +208,177 @@ database connection was not tested. The manual backend command still needs
 `--env-file .env` to load this configuration. At that time the POSIX launcher
 did not load it; the database-aware scripts update above added that support.
 
+### Smooth progress animation (2026-10-16)
+
+The user requested smoother individual progress bars. ArticleProgress now uses
+an accessible ARIA progressbar track/fill with an 800 ms eased width transition
+(`cubic-bezier(0.22, 1, 0.36, 1)`) rather than a native progress element with
+discrete jumps. The fill glides only toward the latest reported percentage;
+model estimates and polling are unchanged. `prefers-reduced-motion: reduce`
+disables the transition. Rounded tracks/fills match the existing feed styling.
+README documents the visual behavior.
+
+Verification: all 19 frontend tests and `npm.cmd run build` pass (30 modules).
+Chrome E2E on isolated ports 18000/15173 passes; it measures a real interpolated
+fill width strictly between the backend's 18% and 43% updates, verifies the
+0.8-second transition, and confirms reduced motion changes duration to zero.
+Existing article progress, onboarding/search/read/detail/source checks pass.
+The E2E command exited normally; process inspection found no test browser/API/
+Vite process or test-port listener. User development services were preserved.
+Done: smooth progress animation. After review, the user requested commit/push
+of the individual streaming progress bars and animation on dev-hjc. Hosted CI
+results for this change are not yet recorded here. Development services remain
+running for the user.
+
+### Individual streaming summary progress (2026-10-16)
+
+The user rejected the batch-wide top bar and requested percentages on each
+article while it is being summarized. The earlier batch UI, count-only API and
+component tests have been replaced. `SummaryProgress.jsx` was replaced by
+`frontend/src/components/ArticleProgress.jsx`; Feed embeds it in pending/failed
+and completed cards, with no global bar. Untouched cards have no bar. Each
+pending card polls its own endpoint once per second; completed cards show a
+static 100%. Search/unmount cleanup cancels polling and ignores stale responses.
+Progress errors offer a retry without hiding the article or inventing progress.
+
+`GET /api/articles/{id}/progress` returns stage, percentage, elapsed_seconds and
+estimated, or 404 for an unknown ID. The database summary status is authoritative:
+only done rows return 100%; failed rows stay below it. No partial model output,
+RSS excerpt or extracted text is exposed. The former `/api/summary-progress`
+batch endpoint has been removed from this uncommitted feature.
+
+`app/summary_progress.py` now stores bounded current-batch per-article entries
+under a lock, not batch counters. Workers report extraction at 2%; queued work
+remains at 0%. The Ollama client accepts an optional on_progress callback and
+streams when it is supplied. Emitted characters estimate generation from 10%
+up to 95% against the 512-token cap using approximately four characters/token.
+This is explicitly an output-budget estimate, not an exact completion fraction
+or remaining-time promise: the output's final length is unknown. The bar does
+not animate from a timer; it may pause during extraction/model prefill and jump
+when generation finishes. Format retries update their stage without decreasing
+the displayed estimate. Validated output reaches Saving at 99%, with 100% only
+after coordinator commit. Failures preserve their partial percentage. Stream
+errors are contained and generators are closed. Default direct client calls
+without a callback retain their non-streaming behavior.
+
+Elapsed time uses a monotonic clock from worker start and freezes at completion.
+Tracker entries reset on backend restart/new batches; persisted pending rows
+resume normally and done/failed states survive in the database. This remains
+single-process runtime tracking without schema/dependency changes. README now
+documents individual estimates and their limitations instead of batch progress.
+
+Verified on Windows:
+- `.venv/Scripts/python.exe -m unittest discover -s tests -q`: 63 backend tests
+  pass. Streaming tests cover incremental estimates, malformed-output retry,
+  interrupted stream containment/closure and valid two-section output. Tracker
+  tests cover independent articles, queued 0%, monotonic/bounded estimates,
+  failure below 100%, retry reset, frozen elapsed time and restart behavior.
+  Real coordinator tests confirm per-article in-flight progress and post-commit
+  completion. API tests verify exact metadata-only fields and database status.
+  `.venv/Scripts/python.exe -m compileall -q app tests` passes.
+- `npm.cmd test`: all 19 frontend tests pass, including individual 0/intermediate/
+  99/100 states, separate article percentages, elapsed time, failed attempts,
+  retry, stale response isolation and unmounted timer cleanup. `npm.cmd run
+  build` passes with 30 modules.
+- Isolated Chrome E2E (`NEWS_E2E_BACKEND_PORT=18000`,
+  `NEWS_E2E_FRONTEND_PORT=15173`, `npm.cmd run test:e2e`) passes. A controlled
+  model callback reports 18/43/72% on the requested story while other cards are
+  already complete, then the actual coordinator commits a successful summary
+  and the card reaches 100%. Existing onboarding/search/read/detail/source
+  checks also pass. The 390-pixel `news-article-progress-mobile.png` screenshot
+  was visually inspected: each card's bar/percentage/elapsed time fits, with
+  no global bar and no horizontal overflow.
+- A standalone synthetic article through the actual installed Ollama model
+  produced 143 streaming updates and 32 distinct percentages from 10 to 99,
+  with nonempty FACTS (217 characters) and IMPACT (489 characters). It did not
+  touch the application database. The temporary probe script was removed.
+- Test commands exited normally. No isolated Chrome/API/Vite/probe process or
+  listener on 18000/15173 remained. User-requested Vite/FastAPI and pre-existing
+  Ollama were preserved. The live Supabase-backed API returned the new per-
+  article endpoint metadata and Vite returned HTTP 200 after automatic reload.
+
+Done: individual estimated streaming progress and verification. Next: user
+review, then commit/push when requested. Changes remain uncommitted on dev-hjc.
+
+### Initial summary batch progress (superseded, 2026-10-16)
+
+Historical implementation/verification only: the individual streaming progress
+section above supersedes the following batch-only API, UI and test counts.
+
+The user requested a percentage progress bar for summarization. This extends
+MVP pipeline/API/feed steps with `app/summary_progress.py`, a lock-protected
+in-memory snapshot for the current single-process coordinator. A batch starts
+after ingestion selects pending work; only its pending articles count. The
+coordinator advances counts after committing each article result. Percentage
+is floor(100 * (completed + failed) / total). Old completed/failed stories and
+unrequested headlines do not inflate it. Failure counts remain distinct from
+ready summaries; 100% means attempts finished, not universal success. Exceptions
+leave an interrupted snapshot rather than a false completion. Empty refreshes
+retain the last nonempty batch; new/rerun batches replace its counters.
+
+`GET /api/summary-progress` exposes only status, total, completed, failed,
+processed and percentage, with a constrained response model. It is independent
+of article search/category display filters and the 50-result limit. No schema,
+dependency, external AI or ingestion-provider changes were needed. Counters
+reset on backend restart; persisted pending rows resume and form a new batch
+of remaining work. This intentionally does not add durable job history or
+multi-process coordination. Those would require a shared progress store if
+the architecture later changes.
+
+`frontend/src/components/SummaryProgress.jsx` shows an accessible native
+progress element below the feed header, an explicit percentage, processed/
+ready/failed counts, and running/completion/interrupted descriptions. Its
+independent serialized poll runs every five seconds; successful summary
+requests refresh it immediately. Search does not reset or filter batch progress.
+Stale in-flight requests and unmounted timers are ignored/cleared. Transport
+failures hide the stale bar and show Retry progress without hiding the feed.
+Idle zero-work state hides the panel. This is article-attempt progress, with
+no invented per-article token percentage or time estimate. README documents
+the API, denominator, failures, polling and restart behavior.
+
+Verified on Windows:
+- Backend `.venv/Scripts/python.exe -m unittest discover -s tests -q`: all 59
+  tests pass. A controlled real coordinator/SQLite test observes 50% while
+  the second worker is blocked and confirms the first result is already
+  committed. It verifies a 100% batch with one ready/one failed, untouched and
+  older-done exclusion, no-op retention, next-batch reset and interrupted save
+  failure at 0%. API coverage checks exact idle count-only fields.
+  `.venv/Scripts/python.exe -m compileall -q app tests` passes.
+- Frontend `npm.cmd test`: 19 tests pass, including idle/0/50/100, failed and
+  interrupted states, transport failure/retry, request-triggered refresh,
+  stale-response isolation and timer cleanup. `npm.cmd run build` passes,
+  with 30 transformed modules.
+- `NEWS_E2E_BACKEND_PORT=18000`, `NEWS_E2E_FRONTEND_PORT=15173`,
+  `npm.cmd run test:e2e`: the real API/coordinator/SQLite/Chrome flow passes,
+  observing 1 of 2 processed at 50%, then 100% and completed summaries. Its
+  controlled model boundary delays one fixture seven seconds to expose a
+  genuine intermediate batch state. The existing onboarding/search/read/
+  source-link flow also passes. The test has a 45-second timeout for that
+  extra work. `frontend/test-results/news-summary-progress-mobile.png` was
+  visually inspected at 390 px; the green bar, percentage and counts fit,
+  and the browser assertion confirms no horizontal overflow.
+- `git diff --check` passes. All test command sessions exited. Final process
+  inspection found no isolated E2E browser/API/Vite processes, and ports
+  18000/15173/8000/5173 had no listeners. An existing Ollama listener PID 25668
+  on 11434 was preserved; this change did not start Ollama or use its model.
+  No application database was used or changed by the isolated tests.
+
+Done: summary batch progress and verification. Next: user review, then
+commit/push when requested. Changes are uncommitted on `dev-hjc`; no development
+servers were started for this work. The pre-existing AGENTS.md shutdown record
+was preserved.
+
+For the subsequent user-requested review, Vite was started (tracked root 33480)
+and the existing Ollama listener PID 25668 reused; llama3.1:8b was available.
+The first backend startup failed because the Supabase pooler rejected its
+configured tenant/user. After the user confirmed the project was active, the
+failed backend tree was replaced with tracked root 18372 using `--env-file .env`.
+Readiness checks then confirmed five API categories, frontend HTTP 200, and
+the actual summary-progress endpoint running at 25%. Development services are
+intentionally left running at `http://localhost:5173/feed` for user review;
+roots are recorded in ignored `.run/windows-dev.json` and output in `logs/`.
+No database credential change, SQLite fallback or feed reset was performed.
+
 ### Read article indicators (2026-10-09)
 
 The user requested a visible indication of articles already opened/read. This
@@ -264,9 +435,12 @@ extended E2E placed its pending original-source check after the real summary
 coordinator completed that fixture. Moving the check before summarization
 resolved it; the rerun passed. Both browser commands exited and final inspection
 found no E2E browser/server processes or listeners on ports 18000/15173.
-User-requested development services remain running with their tracked roots in
-`.run/windows-dev.json`; Vite returns HTTP 200 and the backend serves the new
-fields after automatic reload. Done: read indicators and verification. After
+During review, development services remained running with their tracked roots in
+`.run/windows-dev.json`; Vite returned HTTP 200 and the backend served the new
+fields after automatic reload. After the user's subsequent shutdown request,
+all eight tracked application/Ollama descendant processes were stopped, ports
+8000/5173/11434 verified closed, and `.run/windows-dev.json` removed.
+Done: read indicators and verification. After
 user review, the user requested commit/push on `dev-hjc`. Hosted CI results for
 this change are not yet recorded here.
 

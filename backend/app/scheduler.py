@@ -20,6 +20,7 @@ from app.db import DatabaseConnection, get_conn
 from app.ingest.extract import extract_full_text
 from app.ingest.rss import fetch_all_feeds
 from app.summarize.ollama_client import Summary, summarize_text
+from app.summary_progress import start_batch, update_article, finish_article, interrupt_batch
 
 
 logger = logging.getLogger(__name__)
@@ -78,13 +79,15 @@ def _process_article(article: dict[str, object]) -> ArticleResult:
     summary = None
 
     try:
+        update_article(article_id, 'extracting', 2)
         extracted_text, extraction_ok = extract_full_text(str(article["url"]))
         summary_input = (
             extracted_text
             if extraction_ok and extracted_text
             else str(article["raw_excerpt"] or "")
         )
-        summary = summarize_text(summary_input)
+        summary = summarize_text(summary_input, on_progress=lambda stage, percent:
+                                 update_article(article_id, stage, percent))
     except Exception:
         logger.exception("Unexpected pipeline failure for article %s", article_id)
 
@@ -199,6 +202,7 @@ def _run_pipeline_cycle(*, fetch_feeds: bool = True) -> None:
             categories if fetch_feeds else [],
         ).fetchall()
 
+        start_batch([article['id'] for article in pending_articles])
         article_iterator = iter(pending_articles)
         with ThreadPoolExecutor(max_workers=PIPELINE_CONCURRENCY) as executor:
             futures: dict[Future[ArticleResult], int] = {}
@@ -219,11 +223,13 @@ def _run_pipeline_cycle(*, fetch_feeds: bool = True) -> None:
                     )
                     result = ArticleResult(article_id, None, False, None)
 
-                if _save_article_result(conn, result):
+                success = _save_article_result(conn, result)
+                if success:
                     summarized_count += 1
                 else:
                     failed_count += 1
                 conn.commit()
+                finish_article(article_id, success)
 
                 next_article = next(article_iterator, None)
                 if next_article is not None:
@@ -256,6 +262,7 @@ def run_pipeline(*, fetch_feeds: bool = True) -> None:
             try:
                 _run_pipeline_cycle(fetch_feeds=fetch_feeds)
             except Exception:
+                interrupt_batch()
                 logger.exception("Pipeline run failed")
 
             with _pipeline_lock:
@@ -272,6 +279,7 @@ def run_pipeline(*, fetch_feeds: bool = True) -> None:
                 return
             logger.info("Starting queued pipeline rerun")
     except BaseException:
+        interrupt_batch()
         with _pipeline_lock:
             _pipeline_running = False
         raise

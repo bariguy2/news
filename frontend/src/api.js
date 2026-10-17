@@ -54,3 +54,8 @@ export function requestSummary(articleId) {
 export function markArticleRead(articleId) {
   return apiFetch(`/api/articles/${articleId}/read`, { method: 'POST', keepalive: true })
 }
+
+
+export function getArticleProgress(articleId) {
+  return apiFetch(`/api/articles/${articleId}/progress`)
+}

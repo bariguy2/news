@@ -7,6 +7,7 @@ from threading import Barrier, Event, Lock, Thread, current_thread
 from unittest.mock import ANY, MagicMock, patch
 
 import app.scheduler as scheduler_module
+import app.summary_progress as progress_module
 from app import db
 from app.config import REFRESH_INTERVAL_MINUTES
 from app.scheduler import PIPELINE_JOB_ID, create_scheduler, run_pipeline
@@ -25,6 +26,8 @@ class PipelineTests(unittest.TestCase):
         self.database_url_patch.start()
         self.now_patch = patch("app.scheduler._utc_now", return_value=NOW)
         self.now_patch.start()
+        self.progress_patch = patch.object(progress_module, '_articles', {})
+        self.progress_patch.start()
         db.init_db()
         self.set_categories(["World"])
         with scheduler_module._pipeline_lock:
@@ -38,6 +41,7 @@ class PipelineTests(unittest.TestCase):
             scheduler_module._pipeline_rerun_requested = False
             scheduler_module._pipeline_rerun_fetch_requested = False
         self.now_patch.stop()
+        self.progress_patch.stop()
         self.database_url_patch.stop()
         self.db_path_patch.stop()
         self.temp_dir.cleanup()
@@ -100,6 +104,57 @@ class PipelineTests(unittest.TestCase):
             )
             return cursor.lastrowid
 
+    def test_article_progress_advances_independently_and_finishes_after_commit(self) -> None:
+        self.insert_article('https://example.com/old-done', summary_status='done')
+        self.insert_article('https://example.com/untouched', summary_status='unrequested')
+        one_id = self.insert_article('https://example.com/one')
+        two_id = self.insert_article('https://example.com/two')
+        second_started = Event()
+        release_second = Event()
+        calls = 0
+
+        def summarize(_text, *, on_progress=None):
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                on_progress('summarizing', 37)
+                second_started.set()
+                if not release_second.wait(5):
+                    raise RuntimeError('test release timed out')
+                return None
+            return ('Facts', 'Impact')
+
+        with patch.object(scheduler_module, 'PIPELINE_CONCURRENCY', 1), \
+             patch.object(scheduler_module, 'extract_full_text', return_value=('Text', True)), \
+             patch.object(scheduler_module, 'summarize_text', side_effect=summarize):
+            thread = Thread(target=scheduler_module.run_requested_summaries)
+            thread.start()
+            try:
+                self.assertTrue(second_started.wait(5))
+                snapshot = progress_module.get_article_progress(one_id, 'pending')
+                self.assertEqual('summarizing', snapshot['stage'])
+                self.assertEqual(37, snapshot['percentage'])
+                self.assertEqual(100, progress_module.get_article_progress(two_id, 'done')['percentage'])
+                with db.get_conn() as conn:
+                    self.assertEqual(2, conn.execute("SELECT COUNT(*) FROM articles WHERE summary_status = 'done'").fetchone()[0])
+            finally:
+                release_second.set()
+                thread.join(10)
+            self.assertFalse(thread.is_alive())
+        finished = progress_module.get_article_progress(one_id, 'failed')
+        self.assertEqual('failed', finished['stage'])
+        self.assertEqual(37, finished['percentage'])
+        scheduler_module.run_requested_summaries()
+        self.assertEqual(finished, progress_module.get_article_progress(one_id, 'failed'))
+        pending_id = self.insert_article('https://example.com/restarted-pending')
+        with patch.object(scheduler_module, '_save_article_result', side_effect=RuntimeError('save failed')), \
+             patch.object(scheduler_module, '_process_article', return_value=scheduler_module.ArticleResult(1, None, False, None)), \
+             self.assertLogs('app.scheduler', level='ERROR'):
+            scheduler_module.run_requested_summaries()
+        interrupted = progress_module.get_article_progress(pending_id, 'pending')
+        self.assertEqual('interrupted', interrupted['stage'])
+        self.assertEqual(0, interrupted['percentage'])
+
     @patch("app.scheduler.fetch_all_feeds")
     @patch("app.scheduler.extract_full_text")
     def test_skips_all_work_without_selected_categories(
@@ -147,7 +202,7 @@ class PipelineTests(unittest.TestCase):
                 return "Newest full text", True
             return None, False
 
-        def summarize(text: str) -> tuple[str, str]:
+        def summarize(text: str, **_kwargs) -> tuple[str, str]:
             summary_inputs.append(text)
             if len(summary_inputs) == 2:
                 with db.get_conn() as observer:
@@ -224,7 +279,7 @@ class PipelineTests(unittest.TestCase):
             inserted_ids.append(cursor.lastrowid)
             return [cursor.lastrowid]
 
-        def summarize(_text: str) -> tuple[str, str]:
+        def summarize(_text: str, **_kwargs) -> tuple[str, str]:
             with db.get_conn() as observer:
                 visible_after_ingest_commit.append(
                     observer.execute(
@@ -267,7 +322,7 @@ class PipelineTests(unittest.TestCase):
             published_at=NOW - timedelta(minutes=1),
         )
 
-        def summarize(text: str):
+        def summarize(text: str, **_kwargs):
             if "fails" in text:
                 return None
             return "Facts", "Impact"
@@ -333,7 +388,7 @@ class PipelineTests(unittest.TestCase):
 
         self.assertEqual("failed", statuses[failed_id])
         self.assertEqual("done", statuses[done_id])
-        summarize_mock.assert_called_once_with("Usable excerpt")
+        summarize_mock.assert_called_once_with("Usable excerpt", on_progress=ANY)
         self.assertTrue(any("broken extractor" in line for line in logs.output))
 
     @patch("app.scheduler.fetch_all_feeds", side_effect=RuntimeError("database issue"))

@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import sys
 import tempfile
+import time
 
 import uvicorn
 
@@ -98,8 +99,22 @@ import app.scheduler as pipeline  # noqa: E402
 preferences_routes.run_pipeline = lambda: None
 # Exercise the real request route, coordinator, database writes and polling,
 # while keeping external extraction/model calls deterministic for browser CI.
-pipeline.extract_full_text = lambda url: ("Isolated article text", True)
-pipeline.summarize_text = lambda text: ("Requested facts are ready.", "Requested impact is ready.")
+pipeline.extract_full_text = lambda url: (url, True)
+
+
+def controlled_summary(text, *, on_progress=None):
+    # Exercise real per-article tracking while controlling the external model.
+    if text.endswith('/choose-story'):
+        for percent in (18, 43, 72):
+            if on_progress:
+                on_progress('summarizing', percent)
+            time.sleep(2)
+    if on_progress:
+        on_progress('saving', 99)
+    return ('Requested facts are ready.', 'Requested impact is ready.')
+
+
+pipeline.summarize_text = controlled_summary
 
 
 @asynccontextmanager

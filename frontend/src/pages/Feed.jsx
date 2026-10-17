@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { getArticles, getPreferences, requestSummary, markArticleRead } from '../api.js'
 import { formatRelativeTime } from '../time.js'
+import ArticleProgress from '../components/ArticleProgress.jsx'
 
 
 export const EMPTY_FEED_POLL_MS = 5_000
@@ -162,6 +163,7 @@ function Feed() {
         )}
       </header>
 
+
       <div className="feed-search" role="search" aria-label="Article search">
         <label htmlFor="article-search">Search articles</label>
         <div className="search-controls">
@@ -204,6 +206,7 @@ function Feed() {
                   : article.summary_status === 'failed' ? 'Summary could not be completed'
                     : 'Would you like an AI summary?'}
               </p>
+              <ArticleProgress article={article} />
               {article.summary_status !== 'pending' && (
                 <button
                   type="button"
@@ -234,6 +237,7 @@ function Feed() {
             >
               <article>
                 <StoryCardContent article={article} />
+                <ArticleProgress article={article} />
                 <span className="story-action">Open summary <span aria-hidden="true">→</span></span>
               </article>
             </Link>

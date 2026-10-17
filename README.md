@@ -189,6 +189,34 @@ existing SQLite and PostgreSQL tables without clearing articles or preferences.
 This is still a single-user app: the read state is shared by clients using the
 same database and is removed when its article is purged or the feed is reset.
 
+Each requested article has its own progress bar. Queued articles start at 0%,
+reading the article starts at 2%, and streamed Ollama output advances an
+**Estimated** percentage from 10% up to 95%. A valid two-section response moves
+to Saving at 99%; **100% is reserved for a successful database commit**. Failed
+attempts stop below 100% and retain the Retry summary action. Untouched articles
+have no bar. Completed cards show Summary ready and 100%.
+
+Estimates update every second while pending, alongside the processing stage
+and elapsed processing time.
+
+The bar's fill glides to each reported percentage with an 800 ms ease-out
+transition. Reduced-motion preferences disable this animation. This visual
+transition does not create additional model progress or advance past the latest
+reported value.
+
+The generation estimate uses emitted characters
+against the configured output budget (approximately four characters per token).
+It cannot know the final output length or remaining time: the bar may pause or
+jump as stages complete and is explicitly labeled estimated. Format retries
+change the stage without decreasing the estimate. It does not advance from a
+timer while the model is stalled. Progress-request failures offer Retry progress.
+
+`GET /api/articles/{id}/progress` returns only stage, percentage, elapsed_seconds
+and estimated. It does not expose article text or partially generated summaries.
+Tracking lives in memory for the current single-process backend. After a
+restart, persisted pending work resumes from a fresh estimate; completed and
+failed states remain authoritative in the database. No schema change is needed.
+
 By default, runtime data stays in the ignored `data/news.db`. To store it in
 Supabase Postgres, create a Supabase project and copy its **Session pooler**
 connection URI from the project's Connect panel into an ignored `backend/.env`

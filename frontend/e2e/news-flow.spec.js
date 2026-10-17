@@ -2,6 +2,7 @@ import { expect, test } from '@playwright/test'
 
 
 test('onboarding leads to a filtered feed, detail, and source link', async ({ page, context }) => {
+  test.setTimeout(45_000)
   await page.goto('/')
 
   await expect(page.getByRole('heading', { name: 'What should make your front page?' })).toBeVisible()
@@ -49,6 +50,28 @@ test('onboarding leads to a filtered feed, detail, and source link', async ({ pa
   await expect(choice).toBeVisible()
   await expect(page.getByRole('link', { name: 'Open summary: Technology story you can choose' })).toHaveCount(0)
   await choice.click()
+  const progress = page.getByRole('progressbar', { name: 'Summary progress for Technology story you can choose' })
+  await expect(progress).toHaveAttribute('aria-valuenow', '18', { timeout: 10_000 })
+  await expect(progress).toHaveAttribute('aria-valuenow', '43', { timeout: 10_000 })
+  const fill = progress.locator('.article-progress-fill')
+  await expect(fill).toHaveCSS('transition-duration', '0.8s')
+  // Capture actual interpolation between two backend-reported percentages.
+  const animatedPercent = await fill.evaluate((element) => new Promise((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      resolve(element.getBoundingClientRect().width / element.parentElement.getBoundingClientRect().width * 100)
+    }))
+  }))
+  expect(animatedPercent).toBeGreaterThan(18)
+  expect(animatedPercent).toBeLessThan(43)
+  await page.emulateMedia({ reducedMotion: 'reduce' })
+  await expect(fill).toHaveCSS('transition-duration', '0s')
+  await page.emulateMedia({ reducedMotion: 'no-preference' })
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.screenshot({ path: 'test-results/news-article-progress-mobile.png', fullPage: true })
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+  await page.setViewportSize({ width: 1280, height: 720 })
+  await expect(progress).toHaveAttribute('aria-valuenow', '100', { timeout: 10_000 })
+  await expect(page.getByRole('heading', { name: 'Summary processing' })).toHaveCount(0)
   await page.getByRole('link', { name: 'Open summary: Technology story you can choose' }).click()
   await expect(page.getByText('Requested facts are ready.')).toBeVisible()
   await expect(page.getByText('Requested impact is ready.')).toBeVisible()

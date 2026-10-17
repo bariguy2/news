@@ -8,6 +8,7 @@ from pydantic import BaseModel
 
 from app.db import get_conn
 from app.scheduler import run_requested_summaries
+from app.summary_progress import get_article_progress
 
 
 router = APIRouter(prefix="/api", tags=["articles"])
@@ -26,6 +27,23 @@ class ArticleListItem(BaseModel):
 
 class ReadStatus(BaseModel):
     read_at: str
+
+
+class ArticleProgressResponse(BaseModel):
+    stage: Literal['unrequested', 'queued', 'extracting', 'summarizing', 'retrying', 'saving', 'done', 'failed', 'interrupted']
+    percentage: int
+    elapsed_seconds: int
+    estimated: bool
+
+
+@router.get('/articles/{article_id}/progress', response_model=ArticleProgressResponse)
+def article_progress(article_id: int) -> dict[str, object]:
+    """Expose metadata without article text or partial model output."""
+    with get_conn() as conn:
+        row = conn.execute('SELECT summary_status FROM articles WHERE id = ?', (article_id,)).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail='Article not found')
+    return get_article_progress(article_id, row['summary_status'])
 
 
 class SummaryRequest(BaseModel):
