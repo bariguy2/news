@@ -46,8 +46,8 @@ export function getArticle(articleId) {
 }
 
 
-export function requestSummary(articleId) {
-  return apiFetch(`/api/articles/${articleId}/summarize`, { method: 'POST' })
+export function requestSummary(articleId, regenerate = false) {
+  return apiFetch(`/api/articles/${articleId}/summarize${regenerate ? '?regenerate=true' : ''}`, { method: 'POST' })
 }
 
 

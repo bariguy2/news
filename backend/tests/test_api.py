@@ -300,6 +300,59 @@ class ApiTests(unittest.TestCase):
             self.assertEqual(404, self.client.post("/api/articles/999999/summarize").status_code)
             worker.assert_not_called()
 
+    def test_regenerate_is_explicit_duplicate_safe_and_replaces_same_article(self) -> None:
+        from app.scheduler import run_requested_summaries
+        article_id = self.insert_article('regenerate', category='Tech', published_at=None)
+        self.client.post(f'/api/articles/{article_id}/read')
+        original = self.client.get(f'/api/articles/{article_id}').json()
+        with patch('app.routes.articles.run_requested_summaries') as worker:
+            self.assertEqual({'summary_status': 'done'}, self.client.post(f'/api/articles/{article_id}/summarize').json())
+            worker.assert_not_called()
+            for _ in range(2):
+                response = self.client.post(f'/api/articles/{article_id}/summarize?regenerate=true')
+                self.assertEqual(200, response.status_code)
+                self.assertEqual({'summary_status': 'pending'}, response.json())
+            worker.assert_called_once_with()
+        db.init_db()
+        with db.get_conn() as conn:
+            row = conn.execute('SELECT summary_status, summary_facts, read_at FROM articles WHERE id = ?', (article_id,)).fetchone()
+            self.assertEqual(('pending', original['summary_facts'], original['read_at']), tuple(row))
+        self.assertEqual(404, self.client.get(f'/api/articles/{article_id}').status_code)
+        self.assertEqual(0, self.client.get(f'/api/articles/{article_id}/progress').json()['percentage'])
+        with patch('app.scheduler.extract_full_text', return_value=('Article text', True)), \
+             patch('app.scheduler.summarize_text', return_value=('New facts', 'New impact')) as model, \
+             patch('app.scheduler.fetch_all_feeds') as rss:
+            run_requested_summaries()
+        model.assert_called_once()
+        rss.assert_not_called()
+        replaced = self.client.get(f'/api/articles/{article_id}').json()
+        self.assertEqual('New facts', replaced['summary_facts'])
+        self.assertEqual('New impact', replaced['summary_impact'])
+        self.assertEqual(original['read_at'], replaced['read_at'])
+        self.assertEqual(original['id'], replaced['id'])
+        self.assertEqual(original['url'], replaced['url'])
+        self.assertEqual(1, len(self.client.get('/api/articles').json()))
+        self.assertEqual(100, self.client.get(f'/api/articles/{article_id}/progress').json()['percentage'])
+        self.assertEqual(404, self.client.post('/api/articles/999999/summarize?regenerate=true').status_code)
+        self.assertEqual(422, self.client.post(f'/api/articles/{article_id}/summarize?regenerate=invalid').status_code)
+
+    def test_failed_regeneration_preserves_previous_text_and_remains_retryable(self) -> None:
+        from app.scheduler import run_requested_summaries
+        article_id = self.insert_article('regeneration-failure', category='Tech', published_at=None)
+        original = self.client.get(f'/api/articles/{article_id}').json()
+        with patch('app.routes.articles.run_requested_summaries'):
+            self.client.post(f'/api/articles/{article_id}/summarize?regenerate=true')
+        with patch('app.scheduler.extract_full_text', return_value=('Article text', True)), \
+             patch('app.scheduler.summarize_text', return_value=None):
+            run_requested_summaries()
+        with db.get_conn() as conn:
+            row = conn.execute('SELECT summary_status, summary_facts, summary_impact FROM articles WHERE id = ?', (article_id,)).fetchone()
+            self.assertEqual(('failed', original['summary_facts'], original['summary_impact']), tuple(row))
+        self.assertEqual(404, self.client.get(f'/api/articles/{article_id}').status_code)
+        with patch('app.routes.articles.run_requested_summaries') as worker:
+            self.assertEqual({'summary_status': 'pending'}, self.client.post(f'/api/articles/{article_id}/summarize').json())
+            worker.assert_called_once_with()
+
     def test_preferences_get_post_and_persist(self) -> None:
         initial = self.client.get("/api/preferences")
         self.assertEqual(

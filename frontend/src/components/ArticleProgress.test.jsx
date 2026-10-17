@@ -68,3 +68,13 @@ it('recovers from progress errors and ignores responses after switching articles
   await act(async () => { finishOld({ ...queued, stage: 'done', percentage: 100 }) })
   expect(screen.getByRole('progressbar', { name: /Second story/ })).toHaveAttribute('aria-valuenow', '0')
 })
+
+it.each(['done', 'failed'])('notifies the parent once on %s and stops pending polling', async (stage) => {
+  const onStatusChange = vi.fn()
+  getArticleProgress.mockResolvedValue({ ...queued, stage, percentage: stage === 'done' ? 100 : 42 })
+  render(<ArticleProgress article={article} onStatusChange={onStatusChange} />)
+  await act(async () => {})
+  expect(onStatusChange).toHaveBeenCalledExactlyOnceWith(1, stage)
+  await act(async () => { await vi.advanceTimersByTimeAsync(10_000) })
+  expect(getArticleProgress).toHaveBeenCalledTimes(1)
+})

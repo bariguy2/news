@@ -102,7 +102,11 @@ preferences_routes.run_pipeline = lambda: None
 pipeline.extract_full_text = lambda url: (url, True)
 
 
+summary_attempts = {}
+
+
 def controlled_summary(text, *, on_progress=None):
+    summary_attempts[text] = summary_attempts.get(text, 0) + 1
     # Exercise real per-article tracking while controlling the external model.
     if text.endswith('/choose-story'):
         for percent in (18, 43, 72):
@@ -111,6 +115,8 @@ def controlled_summary(text, *, on_progress=None):
             time.sleep(2)
     if on_progress:
         on_progress('saving', 99)
+    if summary_attempts[text] > 1:
+        return ('Regenerated facts are ready.', 'Regenerated impact is ready.')
     return ('Requested facts are ready.', 'Requested impact is ready.')
 
 

@@ -106,8 +106,6 @@ def _save_article_result(conn: DatabaseConnection, result: ArticleResult) -> boo
             UPDATE articles
             SET extracted_text = ?,
                 extraction_ok = ?,
-                summary_facts = NULL,
-                summary_impact = NULL,
                 summary_status = 'failed'
             WHERE id = ?
             """,

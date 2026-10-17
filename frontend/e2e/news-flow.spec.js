@@ -50,6 +50,18 @@ test('onboarding leads to a filtered feed, detail, and source link', async ({ pa
   await expect(choice).toBeVisible()
   await expect(page.getByRole('link', { name: 'Open summary: Technology story you can choose' })).toHaveCount(0)
   await choice.click()
+  // Hold one stale list response: completion must enable the card without it.
+  let delayedFeedResponse = false
+  let releaseFeedResponse
+  await page.route((url) => url.pathname === '/api/articles', async (route) => {
+    const response = await route.fetch()
+    const rows = await response.json()
+    if (!delayedFeedResponse && rows.some((row) => row.id === 4 && row.summary_status === 'pending')) {
+      delayedFeedResponse = true
+      await new Promise((resolve) => { releaseFeedResponse = resolve })
+    }
+    await route.fulfill({ response })
+  })
   const progress = page.getByRole('progressbar', { name: 'Summary progress for Technology story you can choose' })
   await expect(progress).toHaveAttribute('aria-valuenow', '18', { timeout: 10_000 })
   await expect(progress).toHaveAttribute('aria-valuenow', '43', { timeout: 10_000 })
@@ -71,6 +83,12 @@ test('onboarding leads to a filtered feed, detail, and source link', async ({ pa
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
   await page.setViewportSize({ width: 1280, height: 720 })
   await expect(progress).toHaveAttribute('aria-valuenow', '100', { timeout: 10_000 })
+  try {
+    expect(delayedFeedResponse).toBe(true)
+    await expect(page.getByRole('link', { name: 'Open summary: Technology story you can choose' })).toBeVisible({ timeout: 1_000 })
+  } finally {
+    releaseFeedResponse?.()
+  }
   await expect(page.getByRole('heading', { name: 'Summary processing' })).toHaveCount(0)
   await page.getByRole('link', { name: 'Open summary: Technology story you can choose' }).click()
   await expect(page.getByText('Requested facts are ready.')).toBeVisible()
@@ -115,4 +133,25 @@ test('onboarding leads to a filtered feed, detail, and source link', async ({ pa
   await expect(readCard.getByText('Read', { exact: true })).toBeVisible()
   await page.setViewportSize({ width: 390, height: 844 })
   await page.screenshot({ path: 'test-results/news-read-mobile.png', fullPage: true })
+
+  await page.goto('/article/4')
+  await expect(page.getByText('Requested facts are ready.')).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Summarize again' })).toBeVisible()
+  await page.screenshot({ path: 'test-results/news-resummarize-mobile.png', fullPage: true })
+  const regenerationResponse = page.waitForResponse((response) => response.request().method() === 'POST'
+    && response.url().includes('/api/articles/4/summarize?regenerate=true'))
+  await page.getByRole('button', { name: 'Summarize again' }).click()
+  const queuedResponse = await regenerationResponse
+  expect(queuedResponse.status()).toBe(200)
+  expect(await queuedResponse.json()).toEqual({ summary_status: 'pending' })
+  await expect(page).toHaveURL(/\/feed$/)
+  await expect(progress).toHaveAttribute('aria-valuenow', '18', { timeout: 10_000 })
+  const regeneratingCard = page.locator('.story-card').filter({ has: page.getByRole('heading', { name: 'Technology story you can choose' }) })
+  await expect(regeneratingCard.getByText('Read', { exact: true })).toBeVisible()
+  await expect(progress).toHaveAttribute('aria-valuenow', '100', { timeout: 10_000 })
+  await page.getByRole('link', { name: 'Open summary: Technology story you can choose' }).click()
+  await expect(page.getByText('Regenerated facts are ready.')).toBeVisible()
+  await expect(page.getByText('Regenerated impact is ready.')).toBeVisible()
+  await page.reload()
+  await expect(page.getByText('Regenerated facts are ready.')).toBeVisible()
 })

@@ -121,16 +121,18 @@ def mark_article_read(article_id: int) -> dict[str, str]:
 
 
 @router.post("/articles/{article_id}/summarize", response_model=SummaryRequest)
-def request_summary(article_id: int, background_tasks: BackgroundTasks) -> dict[str, str]:
-    """Atomically queue an article once; completed summaries are reused."""
+def request_summary(article_id: int, background_tasks: BackgroundTasks, regenerate: bool = False) -> dict[str, str]:
+    """Queue once; replacing a completed summary requires explicit opt-in."""
+    eligible = ['unrequested', 'failed', 'done'] if regenerate else ['unrequested', 'failed']
+    placeholders = ', '.join('?' for _ in eligible)
     with get_conn() as conn:
         queued = conn.execute(
-            """
+            f"""
             UPDATE articles SET summary_status = 'pending'
-            WHERE id = ? AND summary_status IN ('unrequested', 'failed')
+            WHERE id = ? AND summary_status IN ({placeholders})
             RETURNING id
             """,
-            (article_id,),
+            (article_id, *eligible),
         ).fetchone()
         row = conn.execute(
             "SELECT summary_status FROM articles WHERE id = ?", (article_id,)

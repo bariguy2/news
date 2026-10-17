@@ -84,6 +84,59 @@ Important invariants:
 
 ## Current status
 
+### dev-hjc rebased onto main 21c4ca1 (2026-10-19)
+
+The user requested assessment of main's `21c4ca1` merge and rebasing dev-hjc so
+its four feature commits can merge. Main merged `bariguy/new_ai` (underscore
+in the actual remote branch name), adding lifecycle/configuration work rather
+than changing RSS or AI providers. `start.sh` loads backend/.env, `reset-feed.sh`
+uses the new transactional SQLite/PostgreSQL `app.reset_feed` helper, and new
+`kill.sh` stops only POSIX PID-tracked application services while preserving
+Ollama/data. Root `/env` is now ignored. These remain macOS/POSIX scripts, not
+PowerShell launchers. No application ingestion/model/schema code was changed
+by that upstream merge.
+
+A local recovery branch `codex/dev-hjc-before-rebase-2026-10-19` retains the
+original d71c2e6 tip. All four commits were replayed onto origin/main 21c4ca1.
+Each conflict was only adjacent status additions in AGENTS.md; both branches'
+notes were retained. README merged automatically. Range-diff and blob checks
+confirmed all 23 feature code/test files exactly match the recovery branch and
+all ten upstream script/config/test files exactly match main. No application
+code was rewritten to resolve the conflicts. This entry is folded into the
+last feature commit to retain four commits above main.
+
+Verification on the combined tree:
+- Backend `.venv/Scripts/python.exe -m unittest discover -s tests -q`: 72 tests,
+  70 pass and two opt-in PostgreSQL tests skip without a test URL. Those two
+  PostgreSQL tests also passed separately using the configured connection and
+  connection-local pg_temp tables only, verifying reset/repeat reset and full
+  rollback after a preference constraint failure. The application's news
+  tables were neither reset nor modified. Compileall passes.
+- Frontend `npm.cmd test`: 26 tests pass. `npm.cmd run build`: passes with
+  30 modules. Chrome E2E on isolated ports 18000/15173 passes the complete
+  onboarding/search/read/streaming-animation/regeneration/immediate-completion
+  flow. Its model/extraction boundaries remain deterministic fixtures.
+- All six committed lifecycle/test shell files pass Bash syntax checks. The
+  three full shell integration suites (start, reset-feed, kill) also pass in a
+  disposable LF tree under Git Bash 5.3.9. Windows checkout files are CRLF, so
+  the harness copied committed LF blobs; test-only wrappers supplied Windows
+  Python and the SQLite stdlib in place of the absent sqlite3 CLI. Production
+  scripts/test files were unchanged. Fake-service processes, test directories
+  and the disposable tree were cleaned up. The ignored helper scripts were
+  removed after verification.
+- Test commands exited normally; process inspection found no isolated browser,
+  API, Vite, shell-test or fake-service processes and no listeners on
+  8000/5173/18000/15173/11434. The old Windows dev PID record was stale at the
+  start (no matching running roots/ports) and was removed after verification;
+  no live user-owned service was terminated or database credentials changed.
+
+Done: rebase, conflict resolution and combined verification. The user-authorized
+remote update uses force-with-lease against the original d71c2e6 remote tip so
+concurrent remote work cannot be overwritten. Next: review GitHub CI and merge
+the four rebased commits through the normal PR workflow. Earlier entries that
+say these changes are uncommitted are historical; all four were already pushed
+before this rebase. No open dev-hjc PR was returned by GitHub during inspection.
+
 ### Local work rebased onto updated main (2026-10-09)
 
 `bariguy/new_ai` was rebased from `0096ed9` onto `origin/main` at `27ab794`
@@ -207,6 +260,100 @@ and `git ls-files -- env backend/.env` confirms neither is tracked.
 database connection was not tested. The manual backend command still needs
 `--env-file .env` to load this configuration. At that time the POSIX launcher
 did not load it; the database-aware scripts update above added that support.
+
+### Immediate progress completion notification (2026-10-17)
+
+The user noticed a delay between 100% and Open summary because the individual
+progress poll runs every second while the feed polls every five seconds. The
+progress component now notifies Feed immediately when its API confirms done or
+failed. Feed synchronously promotes the matching pending card, enabling Open
+summary or Retry summary, and queues a serialized refresh for current search/
+metadata. Per-article update revisions prevent older in-flight feed responses
+from reverting confirmed completion to pending. Later requests still trust the
+database, so external regeneration is not permanently masked. Terminal progress
+polls stop; the stable callback does not restart polling on unrelated renders.
+README documents immediate completion behavior.
+
+Verification: `npm.cmd test` passes all 26 frontend tests and `npm.cmd run build`
+passes (30 modules). New tests prove the link is available after a one-second
+progress response before the five-second feed timer or refresh request returns;
+an older pending poll cannot hide it; serialized reruns/timer cleanup still
+work; and done/failed callbacks fire once and stop progress polling. Chrome E2E
+on ports 18000/15173 deliberately holds an actual stale pending feed response
+while summary work finishes. Open summary becomes visible within the assertion's
+one-second limit without releasing that response; normal progress, animation,
+regeneration/read persistence and the full user flow also pass. Test command
+exited normally and isolated browser/API/Vite processes/listeners were verified
+absent. Existing development services were preserved. `git diff --check` passes.
+
+Done: immediate completion notifications. After review, the user requested
+commit/push of re-summarization, spacing and completion-notification changes on
+dev-hjc. Hosted CI results for this change are not yet recorded here.
+
+### Re-summarize completed articles (2026-10-17)
+
+After review, the user requested moving the helper text closer to the original-
+source button. The detail-specific adjacent selector now reduces that button's
+top margin from 2rem to 0.75rem. The production build and isolated Chrome E2E
+pass; the updated 390-pixel news-resummarize-mobile.png was visually inspected
+to confirm the tighter gap and readable wrapping. The E2E command exited and
+its test processes/listeners were verified absent. Existing development
+services remain running. This spacing adjustment is included in the same
+uncommitted re-summarization change.
+
+The user requested the ability to re-summarize an article. The detail page now
+offers Summarize again after FACTS/IMPACT. It calls the existing summary endpoint
+with explicit `?regenerate=true`, disables submission, and navigates to the feed
+on success for the existing individual progress display. A failed transport
+request leaves the current detail visible with an inline retry message. A ref
+guards duplicate clicks, and completion after leaving the detail does not
+redirect the user back to the feed. The original-source link remains available.
+
+`POST /api/articles/{id}/summarize` defaults to its existing reuse behavior.
+Only explicit regenerate=true adds done to the eligible states in the atomic
+conditional UPDATE/RETURNING. Pending duplicates do not queue another worker;
+unknown IDs return 404 and invalid boolean values return 422. Category/read
+state, URL and article ID are unchanged. Queuing commits before background
+work. Persisted pending regeneration resumes after restart; it uses summary-
+only coordination, without refetching RSS. The existing extraction/model
+pipeline runs again; wording is not guaranteed to differ.
+
+The coordinator now retains any existing summary text when an attempt fails,
+instead of clearing both sections. Only successful output replaces FACTS and
+IMPACT together. A failed row still follows existing failed-card/Retry summary
+behavior and is not exposed by the done-only detail endpoint; no stale text is
+presented as a fresh result. Queueing also retains the old stored sections.
+No schema/dependency change was required. README documents the opt-in API,
+navigation, failure preservation and pending detail availability.
+
+Verified on Windows:
+- `.venv/Scripts/python.exe -m unittest discover -s tests -q`: 65 backend tests
+  pass. New real API/coordinator/SQLite checks verify default reuse, explicit
+  pending regeneration, duplicate-safe queueing, initialization with pending
+  work retained, replacement of the same article, read-state preservation,
+  progress reset/completion, no RSS calls, 404/422, failed-generation retention
+  of previous sections and a retryable failed state. Compileall passes.
+- `npm.cmd test`: all 22 frontend tests pass, including disabled duplicate
+  clicks, explicit regeneration opt-in, feed navigation, failed request/retry
+  with the current summary still visible and no late redirect after leaving.
+  `npm.cmd run build` passes with 30 transformed modules.
+- Chrome E2E on isolated ports 18000/15173 passes the existing full flow and a
+  regeneration of its already-completed/read article. It verifies the actual
+  opt-in POST response, feed progress from 18% through successful 100%, read
+  badge retention, changed FACTS/IMPACT and persistence after page reload.
+  `frontend/test-results/news-resummarize-mobile.png` was visually inspected
+  at 390 px: button, explanatory text and source link fit the detail layout.
+- A temporary Supabase transaction exercised the actual route SQL/default
+  reuse, explicit and duplicate requests, failure retention, successful write
+  replacement and read-state preservation. The probe did not execute queued
+  background tasks or touch existing rows. All probe writes were rolled back,
+  zero probe rows confirmed afterward, and the script removed.
+- Test commands exited normally. Final inspection found no isolated Chrome/
+  API/Vite/probe process or listener on 18000/15173. Existing user-requested
+  development services were preserved; frontend HTTP 200 was confirmed.
+
+Done: re-summarization and verification. Next: user review, then commit/push
+when requested. Changes remain uncommitted on dev-hjc.
 
 ### Smooth progress animation (2026-10-16)
 

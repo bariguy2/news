@@ -5,7 +5,7 @@ const labels = { queued: 'Waiting to start', extracting: 'Reading article', summ
   retrying: 'Retrying summary format', saving: 'Saving summary', done: 'Summary ready',
   failed: 'Summary failed', interrupted: 'Processing interrupted' }
 
-export default function ArticleProgress({ article }) {
+export default function ArticleProgress({ article, onStatusChange }) {
   const [snapshot, setSnapshot] = useState(null)
   const [error, setError] = useState(false)
   const [retryKey, setRetryKey] = useState(0)
@@ -16,20 +16,25 @@ export default function ArticleProgress({ article }) {
     setError(false)
     if (article.summary_status !== 'pending' && article.summary_status !== 'failed') return
     async function refresh() {
+      let pollAgain = article.summary_status === 'pending'
       try {
         const result = await getArticleProgress(article.id)
         if (!active) return
         setSnapshot(result)
         setError(false)
+        if (result.stage === 'done' || result.stage === 'failed') {
+          pollAgain = false
+          if (article.summary_status === 'pending') onStatusChange?.(article.id, result.stage)
+        }
       } catch {
         if (active) setError(true)
       } finally {
-        if (active && article.summary_status === 'pending') timer = window.setTimeout(refresh, 1_000)
+        if (active && pollAgain) timer = window.setTimeout(refresh, 1_000)
       }
     }
     refresh()
     return () => { active = false; window.clearTimeout(timer) }
-  }, [article.id, article.summary_status, retryKey])
+  }, [article.id, article.summary_status, retryKey, onStatusChange])
 
   if (article.summary_status === 'unrequested') return null
   const done = article.summary_status === 'done' || snapshot?.stage === 'done'

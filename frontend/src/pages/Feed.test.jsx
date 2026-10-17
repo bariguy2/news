@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { getArticles, getPreferences, requestSummary, markArticleRead } from '../api.js'
+import { getArticles, getPreferences, requestSummary, markArticleRead, getArticleProgress } from '../api.js'
 import Feed, { EMPTY_FEED_POLL_MS, POPULATED_FEED_POLL_MS } from './Feed.jsx'
 
 
@@ -17,6 +17,7 @@ vi.mock('../api.js', () => ({
 describe('feed polling', () => {
   beforeEach(() => {
     vi.useFakeTimers()
+    getArticleProgress.mockReset().mockResolvedValue({ stage: 'queued', percentage: 0, elapsed_seconds: 0, estimated: true })
     getPreferences.mockResolvedValue({
       onboarded: true,
       selected_categories: ['Tech'],
@@ -206,6 +207,45 @@ describe('feed polling', () => {
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Retry saving read status' })) })
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
     expect(screen.getByText('Read', { exact: true })).toBeVisible()
+  })
+
+  it('opens a completed summary immediately before the five-second feed refresh', async () => {
+    const pending = { id: 40, title: 'Immediate summary', source: 'Source', category: 'Tech',
+      published_at: null, url: 'https://example.com/immediate', summary_status: 'pending' }
+    let finishRefresh
+    getArticles.mockReset().mockResolvedValueOnce([pending])
+      .mockImplementationOnce(() => new Promise((resolve) => { finishRefresh = resolve }))
+    getArticleProgress.mockResolvedValueOnce({ stage: 'summarizing', percentage: 80 })
+      .mockResolvedValue({ stage: 'done', percentage: 100 })
+    render(<MemoryRouter><Feed /></MemoryRouter>)
+    await act(async () => {})
+    expect(screen.queryByRole('link', { name: 'Open summary: Immediate summary' })).not.toBeInTheDocument()
+    await act(async () => { await vi.advanceTimersByTimeAsync(1_000) })
+    expect(screen.getByRole('link', { name: 'Open summary: Immediate summary' })).toBeVisible()
+    expect(getArticles).toHaveBeenCalledTimes(2)
+    await act(async () => { finishRefresh([{ ...pending, summary_status: 'done' }]) })
+  })
+
+  it('keeps completion visible when an older in-flight feed poll returns pending', async () => {
+    const pending = { id: 41, title: 'Keep completed status', source: 'Source', category: 'Tech',
+      published_at: null, url: 'https://example.com/stale-poll', summary_status: 'pending' }
+    let finishPoll
+    let finishProgress
+    getArticles.mockReset().mockResolvedValueOnce([pending])
+      .mockImplementationOnce(() => new Promise((resolve) => { finishPoll = resolve }))
+      .mockResolvedValue([{ ...pending, summary_status: 'done' }])
+    getArticleProgress.mockImplementationOnce(() => new Promise((resolve) => { finishProgress = resolve }))
+    const { unmount } = render(<MemoryRouter><Feed /></MemoryRouter>)
+    await act(async () => {})
+    await act(async () => { await vi.advanceTimersByTimeAsync(EMPTY_FEED_POLL_MS) })
+    await act(async () => { finishProgress({ stage: 'done', percentage: 100 }) })
+    expect(screen.getByRole('link', { name: 'Open summary: Keep completed status' })).toBeVisible()
+    await act(async () => { finishPoll([pending]) })
+    expect(screen.getByRole('link', { name: 'Open summary: Keep completed status' })).toBeVisible()
+    expect(getArticles).toHaveBeenCalledTimes(3)
+    unmount()
+    await act(async () => { await vi.runOnlyPendingTimersAsync() })
+    expect(getArticles).toHaveBeenCalledTimes(3)
   })
 
   it('serializes a requested refresh with an already running poll', async () => {

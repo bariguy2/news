@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { getArticles, getPreferences, requestSummary, markArticleRead } from '../api.js'
 import { formatRelativeTime } from '../time.js'
@@ -38,6 +38,16 @@ function Feed() {
   const [readErrors, setReadErrors] = useState({})
   const savedReads = useRef({})
   const refreshArticles = useRef(() => {})
+  const summaryUpdates = useRef({ revision: 0, articles: {} })
+
+  const handleSummaryStatus = useCallback((articleId, status) => {
+    if (status !== 'done' && status !== 'failed') return
+    const updates = summaryUpdates.current
+    updates.articles[articleId] = { status, revision: ++updates.revision }
+    setArticles((previous) => previous.map((item) => item.id === articleId && item.summary_status === 'pending'
+      ? { ...item, summary_status: status } : item))
+    refreshArticles.current()
+  }, [])
 
   useEffect(() => {
     const timer = window.setTimeout(() => setQuery(search.trim()), 300)
@@ -96,12 +106,20 @@ function Feed() {
         return
       }
       loadInProgress = true
+      const requestRevision = summaryUpdates.current.revision
       try {
         const result = await getArticles(selectedCategories, query)
         if (!active) return
-        hasPendingArticles = result.length === 0 || result.some((article) => article.summary_status === 'pending')
-        setArticles(result.map((item) => savedReads.current[item.id]
-          ? { ...item, read_at: savedReads.current[item.id] } : item))
+        const resolved = result.map((item) => {
+          const update = summaryUpdates.current.articles[item.id]
+          return { ...item,
+            ...(savedReads.current[item.id] ? { read_at: savedReads.current[item.id] } : {}),
+            ...(item.summary_status === 'pending' && update?.revision > requestRevision
+              ? { summary_status: update.status } : {}),
+          }
+        })
+        hasPendingArticles = resolved.length === 0 || resolved.some((article) => article.summary_status === 'pending')
+        setArticles(resolved)
         setError('')
       } catch {
         if (active && initialLoad) {
@@ -206,7 +224,7 @@ function Feed() {
                   : article.summary_status === 'failed' ? 'Summary could not be completed'
                     : 'Would you like an AI summary?'}
               </p>
-              <ArticleProgress article={article} />
+              <ArticleProgress article={article} onStatusChange={handleSummaryStatus} />
               {article.summary_status !== 'pending' && (
                 <button
                   type="button"
@@ -237,7 +255,7 @@ function Feed() {
             >
               <article>
                 <StoryCardContent article={article} />
-                <ArticleProgress article={article} />
+                <ArticleProgress article={article} onStatusChange={handleSummaryStatus} />
                 <span className="story-action">Open summary <span aria-hidden="true">→</span></span>
               </article>
             </Link>

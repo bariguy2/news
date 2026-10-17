@@ -168,6 +168,21 @@ To request one summary through the API, use
 `POST /api/articles/{id}/summarize`. Repeated requests reuse queued or completed
 work. This processes queued articles without refetching feeds.
 
+Open a completed article and choose **Summarize again** to request a fresh
+FACTS/IMPACT summary. The app returns to the feed so you can follow that
+article's progress. The request button disables while submitting and offers
+an inline error if queuing fails. Existing article identity and read status
+are preserved; no duplicate article is created.
+
+The API opt-in is `POST /api/articles/{id}/summarize?regenerate=true`.
+Without that flag, requests continue to reuse completed summaries. Repeated
+requests while pending reuse the queued work. A successful attempt replaces
+both summary sections. If generation fails, previous summary text remains in
+storage, the card shows failed with Retry summary, and the done-only detail
+route remains unavailable until a successful retry. Pending work resumes after
+restart as usual. Regeneration uses the existing extraction/model pipeline;
+it does not fetch the RSS feeds again or guarantee different wording.
+
 Use **Search articles** at the top of the feed to find fetched stories in your
 selected categories. Search ignores letter case and matches a literal phrase
 in titles, sources, categories, RSS excerpts, and available FACTS/IMPACT summaries.
@@ -198,6 +213,9 @@ have no bar. Completed cards show Summary ready and 100%.
 
 Estimates update every second while pending, alongside the processing stage
 and elapsed processing time.
+When progress confirms completion, the card immediately enables **Open summary**
+without waiting for the feed's separate five-second refresh. Confirmed failures
+likewise enable retry immediately. Progress polling stops on either final state.
 
 The bar's fill glides to each reported percentage with an 800 ms ease-out
 transition. Reduced-motion preferences disable this animation. This visual
