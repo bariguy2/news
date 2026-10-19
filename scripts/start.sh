@@ -150,7 +150,12 @@ fi
 printf 'Starting backend...\n'
 (
     cd "$REPO_ROOT/backend"
-    nohup .venv/bin/uvicorn app.main:app --port 8000 >"$BACKEND_LOG" 2>&1 &
+    # Let python-dotenv parse credentials; never source them as shell code.
+    set -- app.main:app --port 8000
+    if [[ -f .env ]]; then
+        set -- "$@" --env-file .env
+    fi
+    nohup .venv/bin/uvicorn "$@" >"$BACKEND_LOG" 2>&1 &
     printf '%s\n' "$!" >"$BACKEND_PID_FILE"
 )
 if ! wait_for_url "http://localhost:8000/api/categories" "$BACKEND_WAIT_ATTEMPTS" "$BACKEND_PID_FILE"; then

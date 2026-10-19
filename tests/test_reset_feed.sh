@@ -85,6 +85,15 @@ start_fake_process() {
 }
 
 mkdir -p "$TEST_ROOT/scripts" "$TEST_ROOT/data" "$TEST_ROOT/.run" "$FAKE_BIN"
+mkdir -p "$TEST_ROOT/backend/app" "$TEST_ROOT/backend/.venv/bin"
+cp "$SOURCE_ROOT/backend/app/"{__init__,config,db,reset_feed}.py "$TEST_ROOT/backend/app/"
+export NEWS_TEST_PYTHON="$SOURCE_ROOT/backend/.venv/bin/python"
+unset DATABASE_URL
+cat >"$TEST_ROOT/backend/.venv/bin/python" <<'EOF'
+#!/usr/bin/env bash
+exec "$NEWS_TEST_PYTHON" "$@"
+EOF
+chmod +x "$TEST_ROOT/backend/.venv/bin/python"
 cp "$SOURCE_ROOT/scripts/reset-feed.sh" "$TEST_ROOT/scripts/reset-feed.sh"
 chmod +x "$TEST_ROOT/scripts/reset-feed.sh"
 
@@ -157,7 +166,7 @@ printf '%s\n' "$old_frontend_pid" >"$TEST_ROOT/.run/frontend.pid"
 
 first_output="$($TEST_ROOT/scripts/reset-feed.sh)"
 [[ "$first_output" == *"Deleted 2 article rows"* ]] || fail "first reset did not report two deleted rows"
-[[ "$first_output" == *"pipeline refresh triggered"* ]] || fail "first reset did not report refresh"
+[[ "$first_output" == *"Pipeline refresh triggered"* ]] || fail "first reset did not report refresh"
 assert_stopped "$old_backend_pid"
 assert_stopped "$old_frontend_pid"
 assert_running "$ollama_pid"
@@ -213,6 +222,24 @@ missing_output="$($TEST_ROOT/scripts/reset-feed.sh)"
 [[ ! -f "$TEST_ROOT/.run/backend.pid" ]] || fail "missing database guard launched backend"
 [[ ! -f "$TEST_ROOT/.run/frontend.pid" ]] || fail "missing database guard launched frontend"
 assert_running "$ollama_pid"
+
+# A configured PostgreSQL failure must not fall back to SQLite or relaunch.
+sqlite3 "$TEST_ROOT/data/news.db" "CREATE TABLE articles (id INTEGER); INSERT INTO articles VALUES (1);"
+printf '%s\n' 'DATABASE_URL=invalid-secret-connection-string' >"$TEST_ROOT/backend/.env"
+if failed_output="$($TEST_ROOT/scripts/reset-feed.sh 2>&1)"; then
+    fail "invalid configured database returned success"
+fi
+[[ "$failed_output" == *"Resetting configured PostgreSQL database"* ]] || fail "dotenv database was not selected"
+[[ "$failed_output" == *"Database reset failed"* ]] || fail "reset failure was not reported"
+[[ "$failed_output" != *"invalid-secret-connection-string"* ]] || fail "reset leaked credentials"
+[[ "$(sqlite3 "$TEST_ROOT/data/news.db" 'SELECT COUNT(*) FROM articles')" == "1" ]] || fail "PostgreSQL failure changed SQLite data"
+[[ ! -f "$TEST_ROOT/.run/backend.pid" && ! -f "$TEST_ROOT/.run/frontend.pid" ]] || fail "failed reset relaunched app"
+[[ "$(cat "$REFRESH_COUNT_FILE")" == "3" ]] || fail "failed reset dispatched refresh"
+
+# Environment values take precedence over dotenv, including an empty URL.
+rm "$TEST_ROOT/data/news.db"
+override_output="$(DATABASE_URL='' "$TEST_ROOT/scripts/reset-feed.sh")"
+[[ "$override_output" == *"nothing to reset"* ]] || fail "explicit SQLite selection did not override dotenv"
 
 cleanup
 trap - EXIT

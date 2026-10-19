@@ -5,7 +5,6 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 RUN_DIR="$REPO_ROOT/.run"
-DB_PATH="$REPO_ROOT/data/news.db"
 
 BACKEND_PID_FILE="$RUN_DIR/backend.pid"
 FRONTEND_PID_FILE="$RUN_DIR/frontend.pid"
@@ -81,23 +80,16 @@ stop_if_running "$FRONTEND_PID_FILE" "frontend"
 refuse_untracked_server "http://localhost:8000" "Backend" "8000"
 refuse_untracked_server "http://localhost:5173" "Frontend" "5173"
 
-if [[ ! -f "$DB_PATH" ]]; then
-    printf 'No database found at %s; nothing to reset.\n' "$DB_PATH"
-    exit 0
+# Use the backend's connection helper and the same dotenv precedence as Uvicorn.
+if (cd "$REPO_ROOT/backend" && .venv/bin/python -m app.reset_feed); then
+    :
+else
+    reset_status=$?
+    if [[ "$reset_status" == "3" ]]; then
+        exit 0  # Missing local SQLite database: preserve the existing no-op.
+    fi
+    exit "$reset_status"
 fi
-
-deleted_rows="$(sqlite3 "$DB_PATH" <<'SQL'
-BEGIN IMMEDIATE;
-SELECT COUNT(*) FROM articles;
-DELETE FROM articles;
-UPDATE preferences
-SET onboarded = 0,
-    selected_categories = '[]'
-WHERE id = 1;
-COMMIT;
-SQL
-)"
-printf 'Deleted %s article rows and reset onboarding preferences.\n' "$deleted_rows"
 
 "$SCRIPT_DIR/start.sh"
 
@@ -107,4 +99,5 @@ if [[ "$refresh_response" != *'"status":"started"'* ]]; then
     exit 1
 fi
 
-printf 'Feed reset. Onboarding will show on next visit to http://localhost:5173 — pipeline refresh triggered; first articles may take a few minutes.\n'
+printf 'Feed reset. Open http://localhost:5173 and choose categories to fetch new articles.\n'
+printf 'Pipeline refresh triggered; it does no feed work until onboarding is complete.\n'

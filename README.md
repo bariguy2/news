@@ -85,6 +85,23 @@ the script; it never stops Ollama. It refuses to replace an untracked process
 already serving port 8000 or 5173. Runtime PID files are written under `.run/`,
 with service output under `logs/`.
 
+The launcher loads `backend/.env` when it exists. A nonempty `DATABASE_URL`
+selects Supabase PostgreSQL; otherwise the backend uses `data/news.db`.
+Variables already exported in your terminal take precedence over the file.
+The file is parsed as dotenv configuration, never executed as shell code.
+
+Stop the backend and frontend started by the launcher:
+
+```sh
+./scripts/kill.sh
+```
+
+This stops only the processes recorded in `.run/backend.pid` and
+`.run/frontend.pid`, leaving Ollama and stored data untouched. It exits quietly
+when the app is already stopped and clears stale PID files. It waits up to five
+seconds for graceful shutdown, then uses SIGKILL if needed. Manually started,
+untracked servers must be stopped in their own terminals.
+
 Reset all stored articles and onboarding preferences, then relaunch and trigger
 an immediate pipeline refresh:
 
@@ -92,8 +109,13 @@ an immediate pipeline refresh:
 ./scripts/reset-feed.sh
 ```
 
-This is a destructive full-feed reset: every article is deleted and current
-category selections are cleared before the app restarts at onboarding.
+This is a destructive full-feed reset of the **configured database**, including
+Supabase when `DATABASE_URL` is set. It uses the same `backend/.env` and exported
+variable precedence as the launcher. Every article is deleted and current
+category selections are cleared in one transaction before the app restarts at
+onboarding; feeds and schema are preserved. A failed reset rolls back and does
+not relaunch the app. A missing local SQLite database is a no-op.
+The queued refresh does no feed work until you select categories again.
 
 Use the manual commands below when active development requires backend reloads.
 
@@ -163,8 +185,8 @@ placeholder with the real URI, and start the API from `backend/` with:
 .\.venv\Scripts\python.exe -m uvicorn app.main:app --reload --port 8000 --env-file .env
 ```
 
-On macOS, add `--env-file .env` to the manual Uvicorn command from `backend/`;
-the POSIX launcher continues to use the process environment. Restart the API
+On macOS, add `--env-file .env` to the manual Uvicorn command from `backend/`,
+or use `./scripts/start.sh`, which loads the file automatically. Restart the API
 after changing the file. The frontend and
 Ollama commands do not change. FastAPI initializes the private `news` schema,
 its tables, RLS, and starter feeds on first connection. A new Supabase database starts
@@ -181,6 +203,20 @@ cd backend
 .venv/bin/python -m unittest discover -s tests -v
 .venv/bin/python -m compileall -q app tests
 ```
+
+On macOS, check the launcher, reset, and stop scripts from the repository root:
+
+```sh
+/bin/bash tests/test_start.sh
+/bin/bash tests/test_reset_feed.sh
+/bin/bash tests/test_kill.sh
+```
+
+These use temporary services and data. The backend suite also includes opt-in
+PostgreSQL reset tests: with `NEWS_TEST_POSTGRES_URL` set privately in your
+environment, run `.venv/bin/python -m unittest discover -s tests -p
+'test_reset_feed_postgres.py'` from `backend/`. They use connection-local temporary
+tables, leaving the application's `news` tables untouched.
 
 Frontend component and production-build checks:
 

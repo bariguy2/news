@@ -117,6 +117,7 @@ EOF
 
 cat >"$TEST_ROOT/backend/.venv/bin/uvicorn" <<'EOF'
 #!/usr/bin/env bash
+printf '%s\n' "$@" >"$FAKE_REPO_ROOT/backend-args"
 if [[ "${FAKE_BACKEND_FAIL:-0}" == "1" ]]; then
     printf 'simulated backend failure\n' >&2
     exit 1
@@ -150,6 +151,13 @@ ollama_pid="$(sed -n '1p' "$OLLAMA_PID_FILE")"
 assert_running "$first_backend_pid"
 assert_running "$first_frontend_pid"
 assert_running "$ollama_pid"
+if /usr/bin/grep -q -- '--env-file' "$TEST_ROOT/backend-args"; then
+    fail "missing environment file was passed to Uvicorn"
+fi
+
+# Credentials must be passed as a dotenv file, never evaluated by the shell.
+printf '%s\n' 'DATABASE_URL=postgresql://example.invalid/news' \
+    'DO_NOT_EXECUTE=$(touch "$FAKE_REPO_ROOT/env-was-sourced")' >"$TEST_ROOT/backend/.env"
 
 second_output="$($TEST_ROOT/scripts/start.sh)"
 [[ "$second_output" == *"Ollama is already running; leaving it untouched."* ]] || fail "bounce did not preserve Ollama"
@@ -162,6 +170,9 @@ assert_stopped "$first_frontend_pid"
 assert_running "$second_backend_pid"
 assert_running "$second_frontend_pid"
 assert_running "$ollama_pid"
+[[ "$(tail -n 2 "$TEST_ROOT/backend-args")" == $'--env-file\n.env' ]] || \
+    fail "backend environment file was not passed to Uvicorn"
+[[ ! -e "$TEST_ROOT/env-was-sourced" ]] || fail "environment file was executed as shell code"
 
 kill -9 "$second_backend_pid"
 assert_stopped "$second_backend_pid"
