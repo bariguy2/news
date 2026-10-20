@@ -168,6 +168,73 @@ To request one summary through the API, use
 `POST /api/articles/{id}/summarize`. Repeated requests reuse queued or completed
 work. This processes queued articles without refetching feeds.
 
+Open a completed article and choose **Summarize again** to request a fresh
+FACTS/IMPACT summary. The app returns to the feed so you can follow that
+article's progress. The request button disables while submitting and offers
+an inline error if queuing fails. Existing article identity and read status
+are preserved; no duplicate article is created.
+
+The API opt-in is `POST /api/articles/{id}/summarize?regenerate=true`.
+Without that flag, requests continue to reuse completed summaries. Repeated
+requests while pending reuse the queued work. A successful attempt replaces
+both summary sections. If generation fails, previous summary text remains in
+storage, the card shows failed with Retry summary, and the done-only detail
+route remains unavailable until a successful retry. Pending work resumes after
+restart as usual. Regeneration uses the existing extraction/model pipeline;
+it does not fetch the RSS feeds again or guarantee different wording.
+
+Use **Search articles** at the top of the feed to find fetched stories in your
+selected categories. Search ignores letter case and matches a literal phrase
+in titles, sources, categories, RSS excerpts, and available FACTS/IMPACT summaries.
+Results update after a short typing pause; **Clear search** restores the feed.
+Search does not fetch new articles or request AI summaries. The API accepts
+`GET /api/articles?category=Tech&q=quantum`; filtering happens before the
+existing 50-result limit, so matches outside the latest 50 stories can appear.
+Extracted full article text is not searched or returned.
+
+Article cards show a **Read** badge and a softer headline color after you open
+their summary or use the feed's original-source link (including middle-click).
+Here, Read means opened; the app does not measure reading completion. Opening
+a summary directly also records it. The first-open timestamp is stored in the
+selected database and survives refreshes and restarts. Existing articles start
+unread. If saving fails, the article remains usable and offers a retry message.
+`POST /api/articles/{id}/read` records the first open idempotently; headline and
+detail responses include nullable `read_at`. Startup adds this column to
+existing SQLite and PostgreSQL tables without clearing articles or preferences.
+This is still a single-user app: the read state is shared by clients using the
+same database and is removed when its article is purged or the feed is reset.
+
+Each requested article has its own progress bar. Queued articles start at 0%,
+reading the article starts at 2%, and streamed Ollama output advances an
+**Estimated** percentage from 10% up to 95%. A valid two-section response moves
+to Saving at 99%; **100% is reserved for a successful database commit**. Failed
+attempts stop below 100% and retain the Retry summary action. Untouched articles
+have no bar. Completed cards show Summary ready and 100%.
+
+Estimates update every second while pending, alongside the processing stage
+and elapsed processing time.
+When progress confirms completion, the card immediately enables **Open summary**
+without waiting for the feed's separate five-second refresh. Confirmed failures
+likewise enable retry immediately. Progress polling stops on either final state.
+
+The bar's fill glides to each reported percentage with an 800 ms ease-out
+transition. Reduced-motion preferences disable this animation. This visual
+transition does not create additional model progress or advance past the latest
+reported value.
+
+The generation estimate uses emitted characters
+against the configured output budget (approximately four characters per token).
+It cannot know the final output length or remaining time: the bar may pause or
+jump as stages complete and is explicitly labeled estimated. Format retries
+change the stage without decreasing the estimate. It does not advance from a
+timer while the model is stalled. Progress-request failures offer Retry progress.
+
+`GET /api/articles/{id}/progress` returns only stage, percentage, elapsed_seconds
+and estimated. It does not expose article text or partially generated summaries.
+Tracking lives in memory for the current single-process backend. After a
+restart, persisted pending work resumes from a fresh estimate; completed and
+failed states remain authoritative in the database. No schema change is needed.
+
 By default, runtime data stays in the ignored `data/news.db`. To store it in
 Supabase Postgres, create a Supabase project and copy its **Session pooler**
 connection URI from the project's Connect panel into an ignored `backend/.env`

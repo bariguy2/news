@@ -84,6 +84,59 @@ Important invariants:
 
 ## Current status
 
+### dev-hjc rebased onto main 21c4ca1 (2026-10-19)
+
+The user requested assessment of main's `21c4ca1` merge and rebasing dev-hjc so
+its four feature commits can merge. Main merged `bariguy/new_ai` (underscore
+in the actual remote branch name), adding lifecycle/configuration work rather
+than changing RSS or AI providers. `start.sh` loads backend/.env, `reset-feed.sh`
+uses the new transactional SQLite/PostgreSQL `app.reset_feed` helper, and new
+`kill.sh` stops only POSIX PID-tracked application services while preserving
+Ollama/data. Root `/env` is now ignored. These remain macOS/POSIX scripts, not
+PowerShell launchers. No application ingestion/model/schema code was changed
+by that upstream merge.
+
+A local recovery branch `codex/dev-hjc-before-rebase-2026-10-19` retains the
+original d71c2e6 tip. All four commits were replayed onto origin/main 21c4ca1.
+Each conflict was only adjacent status additions in AGENTS.md; both branches'
+notes were retained. README merged automatically. Range-diff and blob checks
+confirmed all 23 feature code/test files exactly match the recovery branch and
+all ten upstream script/config/test files exactly match main. No application
+code was rewritten to resolve the conflicts. This entry is folded into the
+last feature commit to retain four commits above main.
+
+Verification on the combined tree:
+- Backend `.venv/Scripts/python.exe -m unittest discover -s tests -q`: 72 tests,
+  70 pass and two opt-in PostgreSQL tests skip without a test URL. Those two
+  PostgreSQL tests also passed separately using the configured connection and
+  connection-local pg_temp tables only, verifying reset/repeat reset and full
+  rollback after a preference constraint failure. The application's news
+  tables were neither reset nor modified. Compileall passes.
+- Frontend `npm.cmd test`: 26 tests pass. `npm.cmd run build`: passes with
+  30 modules. Chrome E2E on isolated ports 18000/15173 passes the complete
+  onboarding/search/read/streaming-animation/regeneration/immediate-completion
+  flow. Its model/extraction boundaries remain deterministic fixtures.
+- All six committed lifecycle/test shell files pass Bash syntax checks. The
+  three full shell integration suites (start, reset-feed, kill) also pass in a
+  disposable LF tree under Git Bash 5.3.9. Windows checkout files are CRLF, so
+  the harness copied committed LF blobs; test-only wrappers supplied Windows
+  Python and the SQLite stdlib in place of the absent sqlite3 CLI. Production
+  scripts/test files were unchanged. Fake-service processes, test directories
+  and the disposable tree were cleaned up. The ignored helper scripts were
+  removed after verification.
+- Test commands exited normally; process inspection found no isolated browser,
+  API, Vite, shell-test or fake-service processes and no listeners on
+  8000/5173/18000/15173/11434. The old Windows dev PID record was stale at the
+  start (no matching running roots/ports) and was removed after verification;
+  no live user-owned service was terminated or database credentials changed.
+
+Done: rebase, conflict resolution and combined verification. The user-authorized
+remote update uses force-with-lease against the original d71c2e6 remote tip so
+concurrent remote work cannot be overwritten. Next: review GitHub CI and merge
+the four rebased commits through the normal PR workflow. Earlier entries that
+say these changes are uncommitted are historical; all four were already pushed
+before this rebase. No open dev-hjc PR was returned by GitHub during inspection.
+
 ### Local work rebased onto updated main (2026-10-09)
 
 `bariguy/new_ai` was rebased from `0096ed9` onto `origin/main` at `27ab794`
@@ -207,6 +260,388 @@ and `git ls-files -- env backend/.env` confirms neither is tracked.
 database connection was not tested. The manual backend command still needs
 `--env-file .env` to load this configuration. At that time the POSIX launcher
 did not load it; the database-aware scripts update above added that support.
+
+### Immediate progress completion notification (2026-10-17)
+
+The user noticed a delay between 100% and Open summary because the individual
+progress poll runs every second while the feed polls every five seconds. The
+progress component now notifies Feed immediately when its API confirms done or
+failed. Feed synchronously promotes the matching pending card, enabling Open
+summary or Retry summary, and queues a serialized refresh for current search/
+metadata. Per-article update revisions prevent older in-flight feed responses
+from reverting confirmed completion to pending. Later requests still trust the
+database, so external regeneration is not permanently masked. Terminal progress
+polls stop; the stable callback does not restart polling on unrelated renders.
+README documents immediate completion behavior.
+
+Verification: `npm.cmd test` passes all 26 frontend tests and `npm.cmd run build`
+passes (30 modules). New tests prove the link is available after a one-second
+progress response before the five-second feed timer or refresh request returns;
+an older pending poll cannot hide it; serialized reruns/timer cleanup still
+work; and done/failed callbacks fire once and stop progress polling. Chrome E2E
+on ports 18000/15173 deliberately holds an actual stale pending feed response
+while summary work finishes. Open summary becomes visible within the assertion's
+one-second limit without releasing that response; normal progress, animation,
+regeneration/read persistence and the full user flow also pass. Test command
+exited normally and isolated browser/API/Vite processes/listeners were verified
+absent. Existing development services were preserved. `git diff --check` passes.
+
+Done: immediate completion notifications. After review, the user requested
+commit/push of re-summarization, spacing and completion-notification changes on
+dev-hjc. Hosted CI results for this change are not yet recorded here.
+
+### Re-summarize completed articles (2026-10-17)
+
+After review, the user requested moving the helper text closer to the original-
+source button. The detail-specific adjacent selector now reduces that button's
+top margin from 2rem to 0.75rem. The production build and isolated Chrome E2E
+pass; the updated 390-pixel news-resummarize-mobile.png was visually inspected
+to confirm the tighter gap and readable wrapping. The E2E command exited and
+its test processes/listeners were verified absent. Existing development
+services remain running. This spacing adjustment is included in the same
+uncommitted re-summarization change.
+
+The user requested the ability to re-summarize an article. The detail page now
+offers Summarize again after FACTS/IMPACT. It calls the existing summary endpoint
+with explicit `?regenerate=true`, disables submission, and navigates to the feed
+on success for the existing individual progress display. A failed transport
+request leaves the current detail visible with an inline retry message. A ref
+guards duplicate clicks, and completion after leaving the detail does not
+redirect the user back to the feed. The original-source link remains available.
+
+`POST /api/articles/{id}/summarize` defaults to its existing reuse behavior.
+Only explicit regenerate=true adds done to the eligible states in the atomic
+conditional UPDATE/RETURNING. Pending duplicates do not queue another worker;
+unknown IDs return 404 and invalid boolean values return 422. Category/read
+state, URL and article ID are unchanged. Queuing commits before background
+work. Persisted pending regeneration resumes after restart; it uses summary-
+only coordination, without refetching RSS. The existing extraction/model
+pipeline runs again; wording is not guaranteed to differ.
+
+The coordinator now retains any existing summary text when an attempt fails,
+instead of clearing both sections. Only successful output replaces FACTS and
+IMPACT together. A failed row still follows existing failed-card/Retry summary
+behavior and is not exposed by the done-only detail endpoint; no stale text is
+presented as a fresh result. Queueing also retains the old stored sections.
+No schema/dependency change was required. README documents the opt-in API,
+navigation, failure preservation and pending detail availability.
+
+Verified on Windows:
+- `.venv/Scripts/python.exe -m unittest discover -s tests -q`: 65 backend tests
+  pass. New real API/coordinator/SQLite checks verify default reuse, explicit
+  pending regeneration, duplicate-safe queueing, initialization with pending
+  work retained, replacement of the same article, read-state preservation,
+  progress reset/completion, no RSS calls, 404/422, failed-generation retention
+  of previous sections and a retryable failed state. Compileall passes.
+- `npm.cmd test`: all 22 frontend tests pass, including disabled duplicate
+  clicks, explicit regeneration opt-in, feed navigation, failed request/retry
+  with the current summary still visible and no late redirect after leaving.
+  `npm.cmd run build` passes with 30 transformed modules.
+- Chrome E2E on isolated ports 18000/15173 passes the existing full flow and a
+  regeneration of its already-completed/read article. It verifies the actual
+  opt-in POST response, feed progress from 18% through successful 100%, read
+  badge retention, changed FACTS/IMPACT and persistence after page reload.
+  `frontend/test-results/news-resummarize-mobile.png` was visually inspected
+  at 390 px: button, explanatory text and source link fit the detail layout.
+- A temporary Supabase transaction exercised the actual route SQL/default
+  reuse, explicit and duplicate requests, failure retention, successful write
+  replacement and read-state preservation. The probe did not execute queued
+  background tasks or touch existing rows. All probe writes were rolled back,
+  zero probe rows confirmed afterward, and the script removed.
+- Test commands exited normally. Final inspection found no isolated Chrome/
+  API/Vite/probe process or listener on 18000/15173. Existing user-requested
+  development services were preserved; frontend HTTP 200 was confirmed.
+
+Done: re-summarization and verification. Next: user review, then commit/push
+when requested. Changes remain uncommitted on dev-hjc.
+
+### Smooth progress animation (2026-10-16)
+
+The user requested smoother individual progress bars. ArticleProgress now uses
+an accessible ARIA progressbar track/fill with an 800 ms eased width transition
+(`cubic-bezier(0.22, 1, 0.36, 1)`) rather than a native progress element with
+discrete jumps. The fill glides only toward the latest reported percentage;
+model estimates and polling are unchanged. `prefers-reduced-motion: reduce`
+disables the transition. Rounded tracks/fills match the existing feed styling.
+README documents the visual behavior.
+
+Verification: all 19 frontend tests and `npm.cmd run build` pass (30 modules).
+Chrome E2E on isolated ports 18000/15173 passes; it measures a real interpolated
+fill width strictly between the backend's 18% and 43% updates, verifies the
+0.8-second transition, and confirms reduced motion changes duration to zero.
+Existing article progress, onboarding/search/read/detail/source checks pass.
+The E2E command exited normally; process inspection found no test browser/API/
+Vite process or test-port listener. User development services were preserved.
+Done: smooth progress animation. After review, the user requested commit/push
+of the individual streaming progress bars and animation on dev-hjc. Hosted CI
+results for this change are not yet recorded here. Development services remain
+running for the user.
+
+### Individual streaming summary progress (2026-10-16)
+
+The user rejected the batch-wide top bar and requested percentages on each
+article while it is being summarized. The earlier batch UI, count-only API and
+component tests have been replaced. `SummaryProgress.jsx` was replaced by
+`frontend/src/components/ArticleProgress.jsx`; Feed embeds it in pending/failed
+and completed cards, with no global bar. Untouched cards have no bar. Each
+pending card polls its own endpoint once per second; completed cards show a
+static 100%. Search/unmount cleanup cancels polling and ignores stale responses.
+Progress errors offer a retry without hiding the article or inventing progress.
+
+`GET /api/articles/{id}/progress` returns stage, percentage, elapsed_seconds and
+estimated, or 404 for an unknown ID. The database summary status is authoritative:
+only done rows return 100%; failed rows stay below it. No partial model output,
+RSS excerpt or extracted text is exposed. The former `/api/summary-progress`
+batch endpoint has been removed from this uncommitted feature.
+
+`app/summary_progress.py` now stores bounded current-batch per-article entries
+under a lock, not batch counters. Workers report extraction at 2%; queued work
+remains at 0%. The Ollama client accepts an optional on_progress callback and
+streams when it is supplied. Emitted characters estimate generation from 10%
+up to 95% against the 512-token cap using approximately four characters/token.
+This is explicitly an output-budget estimate, not an exact completion fraction
+or remaining-time promise: the output's final length is unknown. The bar does
+not animate from a timer; it may pause during extraction/model prefill and jump
+when generation finishes. Format retries update their stage without decreasing
+the displayed estimate. Validated output reaches Saving at 99%, with 100% only
+after coordinator commit. Failures preserve their partial percentage. Stream
+errors are contained and generators are closed. Default direct client calls
+without a callback retain their non-streaming behavior.
+
+Elapsed time uses a monotonic clock from worker start and freezes at completion.
+Tracker entries reset on backend restart/new batches; persisted pending rows
+resume normally and done/failed states survive in the database. This remains
+single-process runtime tracking without schema/dependency changes. README now
+documents individual estimates and their limitations instead of batch progress.
+
+Verified on Windows:
+- `.venv/Scripts/python.exe -m unittest discover -s tests -q`: 63 backend tests
+  pass. Streaming tests cover incremental estimates, malformed-output retry,
+  interrupted stream containment/closure and valid two-section output. Tracker
+  tests cover independent articles, queued 0%, monotonic/bounded estimates,
+  failure below 100%, retry reset, frozen elapsed time and restart behavior.
+  Real coordinator tests confirm per-article in-flight progress and post-commit
+  completion. API tests verify exact metadata-only fields and database status.
+  `.venv/Scripts/python.exe -m compileall -q app tests` passes.
+- `npm.cmd test`: all 19 frontend tests pass, including individual 0/intermediate/
+  99/100 states, separate article percentages, elapsed time, failed attempts,
+  retry, stale response isolation and unmounted timer cleanup. `npm.cmd run
+  build` passes with 30 modules.
+- Isolated Chrome E2E (`NEWS_E2E_BACKEND_PORT=18000`,
+  `NEWS_E2E_FRONTEND_PORT=15173`, `npm.cmd run test:e2e`) passes. A controlled
+  model callback reports 18/43/72% on the requested story while other cards are
+  already complete, then the actual coordinator commits a successful summary
+  and the card reaches 100%. Existing onboarding/search/read/detail/source
+  checks also pass. The 390-pixel `news-article-progress-mobile.png` screenshot
+  was visually inspected: each card's bar/percentage/elapsed time fits, with
+  no global bar and no horizontal overflow.
+- A standalone synthetic article through the actual installed Ollama model
+  produced 143 streaming updates and 32 distinct percentages from 10 to 99,
+  with nonempty FACTS (217 characters) and IMPACT (489 characters). It did not
+  touch the application database. The temporary probe script was removed.
+- Test commands exited normally. No isolated Chrome/API/Vite/probe process or
+  listener on 18000/15173 remained. User-requested Vite/FastAPI and pre-existing
+  Ollama were preserved. The live Supabase-backed API returned the new per-
+  article endpoint metadata and Vite returned HTTP 200 after automatic reload.
+
+Done: individual estimated streaming progress and verification. Next: user
+review, then commit/push when requested. Changes remain uncommitted on dev-hjc.
+
+### Initial summary batch progress (superseded, 2026-10-16)
+
+Historical implementation/verification only: the individual streaming progress
+section above supersedes the following batch-only API, UI and test counts.
+
+The user requested a percentage progress bar for summarization. This extends
+MVP pipeline/API/feed steps with `app/summary_progress.py`, a lock-protected
+in-memory snapshot for the current single-process coordinator. A batch starts
+after ingestion selects pending work; only its pending articles count. The
+coordinator advances counts after committing each article result. Percentage
+is floor(100 * (completed + failed) / total). Old completed/failed stories and
+unrequested headlines do not inflate it. Failure counts remain distinct from
+ready summaries; 100% means attempts finished, not universal success. Exceptions
+leave an interrupted snapshot rather than a false completion. Empty refreshes
+retain the last nonempty batch; new/rerun batches replace its counters.
+
+`GET /api/summary-progress` exposes only status, total, completed, failed,
+processed and percentage, with a constrained response model. It is independent
+of article search/category display filters and the 50-result limit. No schema,
+dependency, external AI or ingestion-provider changes were needed. Counters
+reset on backend restart; persisted pending rows resume and form a new batch
+of remaining work. This intentionally does not add durable job history or
+multi-process coordination. Those would require a shared progress store if
+the architecture later changes.
+
+`frontend/src/components/SummaryProgress.jsx` shows an accessible native
+progress element below the feed header, an explicit percentage, processed/
+ready/failed counts, and running/completion/interrupted descriptions. Its
+independent serialized poll runs every five seconds; successful summary
+requests refresh it immediately. Search does not reset or filter batch progress.
+Stale in-flight requests and unmounted timers are ignored/cleared. Transport
+failures hide the stale bar and show Retry progress without hiding the feed.
+Idle zero-work state hides the panel. This is article-attempt progress, with
+no invented per-article token percentage or time estimate. README documents
+the API, denominator, failures, polling and restart behavior.
+
+Verified on Windows:
+- Backend `.venv/Scripts/python.exe -m unittest discover -s tests -q`: all 59
+  tests pass. A controlled real coordinator/SQLite test observes 50% while
+  the second worker is blocked and confirms the first result is already
+  committed. It verifies a 100% batch with one ready/one failed, untouched and
+  older-done exclusion, no-op retention, next-batch reset and interrupted save
+  failure at 0%. API coverage checks exact idle count-only fields.
+  `.venv/Scripts/python.exe -m compileall -q app tests` passes.
+- Frontend `npm.cmd test`: 19 tests pass, including idle/0/50/100, failed and
+  interrupted states, transport failure/retry, request-triggered refresh,
+  stale-response isolation and timer cleanup. `npm.cmd run build` passes,
+  with 30 transformed modules.
+- `NEWS_E2E_BACKEND_PORT=18000`, `NEWS_E2E_FRONTEND_PORT=15173`,
+  `npm.cmd run test:e2e`: the real API/coordinator/SQLite/Chrome flow passes,
+  observing 1 of 2 processed at 50%, then 100% and completed summaries. Its
+  controlled model boundary delays one fixture seven seconds to expose a
+  genuine intermediate batch state. The existing onboarding/search/read/
+  source-link flow also passes. The test has a 45-second timeout for that
+  extra work. `frontend/test-results/news-summary-progress-mobile.png` was
+  visually inspected at 390 px; the green bar, percentage and counts fit,
+  and the browser assertion confirms no horizontal overflow.
+- `git diff --check` passes. All test command sessions exited. Final process
+  inspection found no isolated E2E browser/API/Vite processes, and ports
+  18000/15173/8000/5173 had no listeners. An existing Ollama listener PID 25668
+  on 11434 was preserved; this change did not start Ollama or use its model.
+  No application database was used or changed by the isolated tests.
+
+Done: summary batch progress and verification. Next: user review, then
+commit/push when requested. Changes are uncommitted on `dev-hjc`; no development
+servers were started for this work. The pre-existing AGENTS.md shutdown record
+was preserved.
+
+For the subsequent user-requested review, Vite was started (tracked root 33480)
+and the existing Ollama listener PID 25668 reused; llama3.1:8b was available.
+The first backend startup failed because the Supabase pooler rejected its
+configured tenant/user. After the user confirmed the project was active, the
+failed backend tree was replaced with tracked root 18372 using `--env-file .env`.
+Readiness checks then confirmed five API categories, frontend HTTP 200, and
+the actual summary-progress endpoint running at 25%. Development services are
+intentionally left running at `http://localhost:5173/feed` for user review;
+roots are recorded in ignored `.run/windows-dev.json` and output in `logs/`.
+No database credential change, SQLite fallback or feed reset was performed.
+
+### Read article indicators (2026-10-09)
+
+The user requested a visible indication of articles already opened/read. This
+extends MVP schema/API/feed/detail steps with nullable `articles.read_at` (UTC
+ISO-8601 text) and `POST /api/articles/{id}/read`. An atomic `UPDATE` with
+`COALESCE` and `RETURNING` preserves the first open and leaves summary state
+unchanged. Unknown IDs return 404. Both list and completed detail responses
+include `read_at` while retaining their private-field boundaries. This remains
+single-user shared database state, not authentication or per-user tracking.
+
+Both fresh schemas include the column. Existing SQLite databases are migrated
+after inspecting `PRAGMA table_info`; PostgreSQL uses `ADD COLUMN IF NOT EXISTS`.
+Startup initialization remains idempotent and preserves existing data; older
+articles start unread. The configured running Supabase database now has the
+column. No new dependency or historical read-state backfill is added.
+
+The feed shows Read beside category/source metadata and uses a softer headline
+color. A successfully loaded summary (including direct navigation) records an
+open via POST; GET itself has no read-state side effects. Normal and middle
+clicks on a feed original-source link also record it without delaying link
+navigation. Read means opened, not measured reading completion; browser
+context-menu opens cannot be detected by the app. Only successful writes show
+the badge, failures offer an inline retry, and saved state survives polling,
+search, refresh and restart. Feed-local confirmed timestamps prevent an older
+poll response from hiding a just-saved badge. Normal article expiry/reset also
+removes read history. README documents these semantics.
+
+Verified on Windows:
+- Backend `.venv/Scripts/python.exe -m unittest discover -s tests -q`: 57 tests
+  pass. Coverage includes unread defaults, all four summary states, first-open
+  idempotency, search/list/detail visibility, missing IDs, and existing SQLite
+  migration with article/read-state preservation across repeat initialization.
+  `.venv/Scripts/python.exe -m compileall -q app tests` passes.
+- Frontend `npm.cmd test`: 15 tests pass, including direct detail opens, no
+  write for unavailable/already-read details, failed-write retries, and original
+  opens retaining the badge during polling. `npm.cmd run build` passes with
+  29 transformed modules.
+- `NEWS_E2E_BACKEND_PORT=18000`, `NEWS_E2E_FRONTEND_PORT=15173`,
+  `npm.cmd run test:e2e`: real isolated API/SQLite/Chrome flow passes original
+  new-tab opens, pending read state without starting summaries, detail read
+  marking, reload persistence, and existing onboarding/search/summary flow.
+  `frontend/test-results/news-read-mobile.png` was visually inspected at 390 px:
+  Read badges and softer headlines remain legible and fit the card metadata.
+- Supabase initialization ran twice successfully; a temporary transaction
+  exercised the real read/list route functions with PostgreSQL, confirming
+  first-open idempotency, unchanged unrequested state and list visibility.
+  Probe writes were rolled back and zero probe rows confirmed afterward.
+  Live development API responses expose read_at. The probe script was removed.
+
+The first migration test passed its assertions but failed Windows cleanup due
+to a plain SQLite connection left open. The fixture now uses ClosingConnection;
+the full suite passed and the old temporary database was removed. The first
+extended E2E placed its pending original-source check after the real summary
+coordinator completed that fixture. Moving the check before summarization
+resolved it; the rerun passed. Both browser commands exited and final inspection
+found no E2E browser/server processes or listeners on ports 18000/15173.
+During review, development services remained running with their tracked roots in
+`.run/windows-dev.json`; Vite returned HTTP 200 and the backend served the new
+fields after automatic reload. After the user's subsequent shutdown request,
+all eight tracked application/Ollama descendant processes were stopped, ports
+8000/5173/11434 verified closed, and `.run/windows-dev.json` removed.
+Done: read indicators and verification. After
+user review, the user requested commit/push on `dev-hjc`. Hosted CI results for
+this change are not yet recorded here.
+
+### Keyword article search (2026-10-09)
+
+The user requested a search bar for fetched articles. This extends MVP steps 7
+and 9 with optional `q` on `GET /api/articles` (maximum 200 characters).
+Search trims surrounding whitespace, ignores case, and matches a literal phrase
+against title, source, category, RSS excerpt and available FACTS/IMPACT summaries.
+Blank search retains the original feed; category filters and all four summary
+states remain supported. Parameterized SQL escapes `!`, `%` and `_` with an
+explicit escape character on SQLite and PostgreSQL. Filtering precedes ordering
+and the existing result limit. List responses still omit excerpts, summaries
+and extracted text; extracted text is not searched. No schema or dependency
+change, RSS fetch or AI request is needed for searching.
+
+The feed has a labeled search input below its header, a 300 ms typing debounce,
+a Clear search button and a distinct No matching stories state. Polls and
+summary-triggered refreshes retain the active search. Effect cleanup ignores
+responses from older searches and cancels their polling timers. Search uses
+the existing selected-category scope and shows at most 50 matching stories.
+README documents the scope, limit and API query.
+
+Verified on Windows:
+- Backend `.venv/Scripts/python.exe -m unittest discover -s tests -v`: all 55
+  tests pass, including each searchable field, category scoping, trimming/case,
+  literal wildcard punctuation, injection input, response privacy and matching
+  an older article beyond 51 newer nonmatches. `compileall -q app tests` passes.
+- Frontend `npm.cmd test`: all ten tests pass, including debouncing, search
+  polling, no matches, clearing and ignoring a stale response.
+- `npm.cmd run build`: passes with 29 transformed modules.
+- `NEWS_E2E_BACKEND_PORT=18000`, `NEWS_E2E_FRONTEND_PORT=15173`,
+  `npm.cmd run test:e2e`: isolated real API/SQLite/Chrome flow passes search,
+  no-match/clear behavior and the existing onboarding/summary/detail/source flow.
+  A 390-pixel mobile viewport has no horizontal overflow. The generated
+  `frontend/test-results/news-search-mobile.png` was visually inspected: search,
+  Clear search, helper text and matching card fit comfortably.
+- A temporary read-only probe loaded the backend environment privately, tested
+  literal/case-insensitive PostgreSQL matching, and called the actual list route
+  with search/category filters through Supabase. Public shapes passed; no
+  application rows were written or changed. The probe script was removed.
+
+The E2E command exited normally and its API/Vite ports 18000/15173 were closed
+afterward; no development services were started. Done: keyword search and
+verification. After user review, the user requested commit/push on `dev-hjc`
+with message `Search bar for article keyword`. CI runs when pushed; hosted
+results for this change are not yet recorded here.
+
+For user review on 2026-10-09, development services were subsequently started
+and intentionally left running. Hidden Windows process roots are recorded in
+ignored `.run/windows-dev.json` (backend 48900, frontend 45784, Ollama 54560),
+with output in `logs/`. FastAPI loads `backend/.env`; readiness checks confirmed
+five API categories, Vite HTTP 200 at `http://localhost:5173/feed`, and the
+configured `llama3.1:8b` model available through Ollama. No feed reset was requested.
 
 ### GitHub Actions CI (2026-10-07)
 

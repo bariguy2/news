@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { getArticles, getPreferences, requestSummary } from '../api.js'
+import { getArticles, getPreferences, requestSummary, markArticleRead } from '../api.js'
 import { formatRelativeTime } from '../time.js'
+import ArticleProgress from '../components/ArticleProgress.jsx'
 
 
 export const EMPTY_FEED_POLL_MS = 5_000
@@ -13,6 +14,7 @@ function StoryCardContent({ article }) {
     <>
       <div className="story-meta">
         <span className="category-badge">{article.category}</span>
+        {article.read_at && <span className="read-badge">Read</span>}
         <span>{article.source}</span>
         <span aria-hidden="true">·</span>
         <time dateTime={article.published_at ?? undefined}>{formatRelativeTime(article.published_at)}</time>
@@ -25,13 +27,45 @@ function StoryCardContent({ article }) {
 
 function Feed() {
   const [articles, setArticles] = useState([])
+  const [search, setSearch] = useState('')
+  const [query, setQuery] = useState('')
   const [categories, setCategories] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [reloadKey, setReloadKey] = useState(0)
   const [requesting, setRequesting] = useState({})
   const [requestErrors, setRequestErrors] = useState({})
+  const [readErrors, setReadErrors] = useState({})
+  const savedReads = useRef({})
   const refreshArticles = useRef(() => {})
+  const summaryUpdates = useRef({ revision: 0, articles: {} })
+
+  const handleSummaryStatus = useCallback((articleId, status) => {
+    if (status !== 'done' && status !== 'failed') return
+    const updates = summaryUpdates.current
+    updates.articles[articleId] = { status, revision: ++updates.revision }
+    setArticles((previous) => previous.map((item) => item.id === articleId && item.summary_status === 'pending'
+      ? { ...item, summary_status: status } : item))
+    refreshArticles.current()
+  }, [])
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setQuery(search.trim()), 300)
+    return () => window.clearTimeout(timer)
+  }, [search])
+
+  async function recordRead(article) {
+    if (article.read_at) return
+    try {
+      const result = await markArticleRead(article.id)
+      savedReads.current[article.id] = result.read_at
+      setArticles((previous) => previous.map((item) => item.id === article.id
+        ? { ...item, read_at: result.read_at } : item))
+      setReadErrors((previous) => ({ ...previous, [article.id]: '' }))
+    } catch {
+      setReadErrors((previous) => ({ ...previous, [article.id]: 'Could not save read status.' }))
+    }
+  }
 
   async function summarizeArticle(article) {
     if (requesting[article.id]) return
@@ -72,11 +106,20 @@ function Feed() {
         return
       }
       loadInProgress = true
+      const requestRevision = summaryUpdates.current.revision
       try {
-        const result = await getArticles(selectedCategories)
+        const result = await getArticles(selectedCategories, query)
         if (!active) return
-        hasPendingArticles = result.length === 0 || result.some((article) => article.summary_status === 'pending')
-        setArticles(result)
+        const resolved = result.map((item) => {
+          const update = summaryUpdates.current.articles[item.id]
+          return { ...item,
+            ...(savedReads.current[item.id] ? { read_at: savedReads.current[item.id] } : {}),
+            ...(item.summary_status === 'pending' && update?.revision > requestRevision
+              ? { summary_status: update.status } : {}),
+          }
+        })
+        hasPendingArticles = resolved.length === 0 || resolved.some((article) => article.summary_status === 'pending')
+        setArticles(resolved)
         setError('')
       } catch {
         if (active && initialLoad) {
@@ -121,7 +164,7 @@ function Feed() {
       refreshArticles.current = () => {}
       if (pollTimer !== null) window.clearTimeout(pollTimer)
     }
-  }, [reloadKey])
+  }, [reloadKey, query])
 
   return (
     <main className="feed-page">
@@ -138,6 +181,20 @@ function Feed() {
         )}
       </header>
 
+
+      <div className="feed-search" role="search" aria-label="Article search">
+        <label htmlFor="article-search">Search articles</label>
+        <div className="search-controls">
+          <input id="article-search" type="search" maxLength={200}
+            placeholder="Search by keyword…" value={search}
+            aria-describedby="search-help"
+            onChange={(event) => setSearch(event.target.value)} />
+          {search && <button type="button" className="secondary-button"
+            onClick={() => { setSearch(''); setQuery('') }}>Clear search</button>}
+        </div>
+        <p id="search-help">Search fetched stories in your selected categories, including available AI summaries.</p>
+      </div>
+
       {loading && <p className="status-message" aria-live="polite">Loading headlines…</p>}
 
       {!loading && error && (
@@ -151,21 +208,23 @@ function Feed() {
 
       {!loading && !error && articles.length === 0 && (
         <section className="empty-state">
-          <h2>No stories yet</h2>
-          <p>The local pipeline may still be fetching headlines. Check back after the first refresh finishes.</p>
+          <h2>{query ? 'No matching stories' : 'No stories yet'}</h2>
+          <p>{query ? 'Try another keyword or clear your search.'
+            : 'The local pipeline may still be fetching headlines. Check back after the first refresh finishes.'}</p>
         </section>
       )}
 
       {!loading && !error && articles.length > 0 && (
         <section className="story-list" aria-label="Headlines">
           {articles.map((article) => article.summary_status !== 'done' ? (
-            <article className="story-card story-card-pending" key={article.id}>
+            <article className={`story-card story-card-pending${article.read_at ? ' story-card-read' : ''}`} key={article.id}>
               <StoryCardContent article={article} />
               <p className="summary-pending" aria-live="polite">
                 {article.summary_status === 'pending' ? 'Summary in progress'
                   : article.summary_status === 'failed' ? 'Summary could not be completed'
                     : 'Would you like an AI summary?'}
               </p>
+              <ArticleProgress article={article} onStatusChange={handleSummaryStatus} />
               {article.summary_status !== 'pending' && (
                 <button
                   type="button"
@@ -178,19 +237,25 @@ function Feed() {
                 </button>
               )}
               {requestErrors[article.id] && <p role="alert">{requestErrors[article.id]}</p>}
-              <a href={article.url} target="_blank" rel="noopener noreferrer">
+              <a href={article.url} target="_blank" rel="noopener noreferrer"
+                onClick={() => recordRead(article)}
+                onAuxClick={(event) => { if (event.button === 1) recordRead(article) }}>
                 Read original at {article.source} <span aria-hidden="true">↗</span>
               </a>
+              {readErrors[article.id] && <div role="alert"><p>{readErrors[article.id]}</p>
+                <button type="button" className="secondary-button" onClick={() => recordRead(article)}>Retry saving read status</button>
+              </div>}
             </article>
           ) : (
             <Link
               aria-label={`Open summary: ${article.title}`}
-              className="story-card"
+              className={`story-card${article.read_at ? ' story-card-read' : ''}`}
               to={`/article/${article.id}`}
               key={article.id}
             >
               <article>
                 <StoryCardContent article={article} />
+                <ArticleProgress article={article} onStatusChange={handleSummaryStatus} />
                 <span className="story-action">Open summary <span aria-hidden="true">→</span></span>
               </article>
             </Link>

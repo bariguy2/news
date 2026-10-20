@@ -101,6 +101,39 @@ class OllamaClientTests(unittest.TestCase):
         self.assertEqual(1, chat_mock.call_count)
         self.assertTrue(any("Ollama unavailable" in line for line in logs.output))
 
+    @patch('app.summarize.ollama_client.ollama.chat')
+    def test_streaming_reports_intermediate_estimates_and_saves_only_valid_output(self, chat_mock):
+        output = f'{FACTS_MARKER}' + 'Facts. ' * 80 + f'{IMPACT_MARKER}' + 'Impact. ' * 40
+        chat_mock.return_value = iter(chat_response(output[i:i+40]) for i in range(0, len(output), 40))
+        updates = []
+        result = summarize_text('Body', on_progress=lambda *update: updates.append(update))
+        self.assertIsNotNone(result)
+        self.assertTrue(chat_mock.call_args.kwargs['stream'])
+        self.assertEqual(('saving', 99), updates[-1])
+        self.assertGreater(len({percentage for _, percentage in updates}), 5)
+        self.assertTrue(all(0 <= percentage < 100 for _, percentage in updates))
+
+    @patch('app.summarize.ollama_client.ollama.chat')
+    def test_streaming_retries_malformed_output_and_contains_interrupted_stream(self, chat_mock):
+        chat_mock.side_effect = [iter([chat_response('Malformed')]),
+                                 iter([chat_response(f'{FACTS_MARKER} Facts. {IMPACT_MARKER} Impact.')])]
+        updates = []
+        with self.assertLogs('app.summarize.ollama_client', level='WARNING'):
+            self.assertEqual(('Facts.', 'Impact.'), summarize_text('Body', on_progress=lambda *u: updates.append(u)))
+        self.assertTrue(any(stage == 'retrying' for stage, _ in updates))
+        closed = []
+        def broken_stream():
+            try:
+                yield chat_response('Partial output')
+                raise ConnectionError('stream stopped')
+            finally:
+                closed.append(True)
+        chat_mock.side_effect = None
+        chat_mock.return_value = broken_stream()
+        with self.assertLogs('app.summarize.ollama_client', level='ERROR'):
+            self.assertIsNone(summarize_text('Body', on_progress=lambda *_: None))
+        self.assertEqual([True], closed)
+
     @patch("app.summarize.ollama_client.ollama.chat")
     def test_rejects_empty_input_without_calling_model(self, chat_mock) -> None:
         with self.assertLogs("app.summarize.ollama_client", level="WARNING"):

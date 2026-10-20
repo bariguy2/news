@@ -31,11 +31,12 @@ export function getCategories() {
 }
 
 
-export function getArticles(categories = []) {
+export function getArticles(categories = [], search = '') {
   const query = new URLSearchParams({ limit: '50' })
   if (categories.length > 0) {
     query.set('category', categories.join(','))
   }
+  if (search.trim()) query.set('q', search.trim())
   return apiFetch(`/api/articles?${query}`)
 }
 
@@ -45,6 +46,16 @@ export function getArticle(articleId) {
 }
 
 
-export function requestSummary(articleId) {
-  return apiFetch(`/api/articles/${articleId}/summarize`, { method: 'POST' })
+export function requestSummary(articleId, regenerate = false) {
+  return apiFetch(`/api/articles/${articleId}/summarize${regenerate ? '?regenerate=true' : ''}`, { method: 'POST' })
+}
+
+
+export function markArticleRead(articleId) {
+  return apiFetch(`/api/articles/${articleId}/read`, { method: 'POST', keepalive: true })
+}
+
+
+export function getArticleProgress(articleId) {
+  return apiFetch(`/api/articles/${articleId}/progress`)
 }

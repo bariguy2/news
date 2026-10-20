@@ -1,12 +1,14 @@
 """Article and category API routes."""
 
 from typing import Literal
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
 from pydantic import BaseModel
 
 from app.db import get_conn
 from app.scheduler import run_requested_summaries
+from app.summary_progress import get_article_progress
 
 
 router = APIRouter(prefix="/api", tags=["articles"])
@@ -20,6 +22,28 @@ class ArticleListItem(BaseModel):
     published_at: str | None
     url: str
     summary_status: Literal["unrequested", "pending", "done", "failed"]
+    read_at: str | None
+
+
+class ReadStatus(BaseModel):
+    read_at: str
+
+
+class ArticleProgressResponse(BaseModel):
+    stage: Literal['unrequested', 'queued', 'extracting', 'summarizing', 'retrying', 'saving', 'done', 'failed', 'interrupted']
+    percentage: int
+    elapsed_seconds: int
+    estimated: bool
+
+
+@router.get('/articles/{article_id}/progress', response_model=ArticleProgressResponse)
+def article_progress(article_id: int) -> dict[str, object]:
+    """Expose metadata without article text or partial model output."""
+    with get_conn() as conn:
+        row = conn.execute('SELECT summary_status FROM articles WHERE id = ?', (article_id,)).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail='Article not found')
+    return get_article_progress(article_id, row['summary_status'])
 
 
 class SummaryRequest(BaseModel):
@@ -35,12 +59,14 @@ class ArticleDetail(BaseModel):
     url: str
     summary_facts: str
     summary_impact: str
+    read_at: str | None
 
 
 @router.get("/articles", response_model=list[ArticleListItem])
 def list_articles(
     category: str | None = None,
     limit: int = Query(default=50, ge=1),
+    q: str | None = Query(default=None, max_length=200),
 ) -> list[dict[str, object]]:
     """Return headlines and their summary state, optionally filtered."""
     categories = list(
@@ -52,12 +78,21 @@ def list_articles(
         placeholders = ", ".join("?" for _ in categories)
         where.append(f"category IN ({placeholders})")
         parameters.extend(categories)
+    search = (q or "").strip()
+    if search:
+        # Treat wildcard characters as literal user input on both databases.
+        pattern = "%" + search.replace("!", "!!").replace("%", "!%").replace("_", "!_") + "%"
+        fields = ("title", "source", "category", "raw_excerpt", "summary_facts", "summary_impact")
+        where.append("(" + " OR ".join(
+            f"LOWER(COALESCE({field}, '')) LIKE LOWER(?) ESCAPE '!'" for field in fields
+        ) + ")")
+        parameters.extend([pattern] * len(fields))
     parameters.append(limit)
 
     with get_conn() as conn:
         rows = conn.execute(
             f"""
-            SELECT id, title, source, category, published_at, url, summary_status
+            SELECT id, title, source, category, published_at, url, summary_status, read_at
             FROM articles
             WHERE {' AND '.join(where)}
             ORDER BY published_at DESC, id DESC
@@ -69,17 +104,35 @@ def list_articles(
     return [dict(row) for row in rows]
 
 
+@router.post("/articles/{article_id}/read", response_model=ReadStatus)
+def mark_article_read(article_id: int) -> dict[str, str]:
+    """Persist the first open time without changing the summary state."""
+    with get_conn() as conn:
+        row = conn.execute(
+            """
+            UPDATE articles SET read_at = COALESCE(read_at, ?)
+            WHERE id = ? RETURNING read_at
+            """,
+            (datetime.now(timezone.utc).isoformat(), article_id),
+        ).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Article not found")
+    return dict(row)
+
+
 @router.post("/articles/{article_id}/summarize", response_model=SummaryRequest)
-def request_summary(article_id: int, background_tasks: BackgroundTasks) -> dict[str, str]:
-    """Atomically queue an article once; completed summaries are reused."""
+def request_summary(article_id: int, background_tasks: BackgroundTasks, regenerate: bool = False) -> dict[str, str]:
+    """Queue once; replacing a completed summary requires explicit opt-in."""
+    eligible = ['unrequested', 'failed', 'done'] if regenerate else ['unrequested', 'failed']
+    placeholders = ', '.join('?' for _ in eligible)
     with get_conn() as conn:
         queued = conn.execute(
-            """
+            f"""
             UPDATE articles SET summary_status = 'pending'
-            WHERE id = ? AND summary_status IN ('unrequested', 'failed')
+            WHERE id = ? AND summary_status IN ({placeholders})
             RETURNING id
             """,
-            (article_id,),
+            (article_id, *eligible),
         ).fetchone()
         row = conn.execute(
             "SELECT summary_status FROM articles WHERE id = ?", (article_id,)
@@ -98,7 +151,7 @@ def get_article(article_id: int) -> dict[str, object]:
         row = conn.execute(
             """
             SELECT id, title, source, category, published_at, url,
-                   summary_facts, summary_impact
+                   summary_facts, summary_impact, read_at
             FROM articles
             WHERE id = ? AND summary_status = 'done'
             """,

@@ -293,8 +293,88 @@ h1 {
   font-weight: 700;
 }
 
+.feed-search {
+  margin-bottom: 2rem;
+}
+
+.feed-search label {
+  display: block;
+  margin-bottom: 0.6rem;
+  font-weight: 700;
+}
+
+.search-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+}
+
+.search-controls input {
+  flex: 1 1 15rem;
+  min-width: 0;
+  width: 100%;
+  padding: 0.85rem 1rem;
+  border: 1px solid var(--line);
+  border-radius: 0.75rem;
+  color: var(--ink);
+  background: var(--paper);
+}
+
+.search-controls input:focus-visible {
+  outline: 3px solid rgb(184 71 43 / 35%);
+  outline-offset: 2px;
+}
+
+.feed-search p {
+  margin: 0.65rem 0 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
 .story-card-pending {
   border-style: dashed;
+}
+
+.read-badge {
+  padding: 0.35rem 0.65rem;
+  border-radius: 999px;
+  color: #49554e;
+  background: #e9e9e3;
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.article-progress { margin: 1rem 0; }
+.article-progress-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+  font-size: 0.85rem;
+}
+.article-progress-heading strong { color: var(--forest); }
+.article-progress-track {
+  width: 100%;
+  height: 0.6rem;
+  margin-top: 0.5rem;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #e2e7e3;
+}
+.article-progress-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: var(--forest);
+  transition: width 0.8s cubic-bezier(0.22, 1, 0.36, 1);
+}
+@media (prefers-reduced-motion: reduce) {
+  .article-progress-fill { transition: none; }
+}
+.article-progress-note { color: var(--muted); font-size: 0.8rem; line-height: 1.5; margin: 0.4rem 0 0; }
+
+.story-card-read h2 {
+  color: #556159;
 }
 
 .summary-pending {
@@ -318,6 +398,11 @@ h1 {
 .detail-page {
   width: min(100% - 2rem, 58rem);
 }
+
+.resummary-actions { margin-top: 2rem; }
+.resummary-actions > p { margin: 0.65rem 0 0; color: var(--muted); line-height: 1.5; font-size: 0.9rem; }
+.resummary-actions button:disabled { opacity: 0.6; cursor: wait; }
+.resummary-actions + .source-link { margin-top: 0.75rem; }
 
 .back-link {
   display: inline-flex;

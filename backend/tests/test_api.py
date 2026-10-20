@@ -114,7 +114,7 @@ class ApiTests(unittest.TestCase):
         articles = response.json()
         self.assertEqual([unrequested_id, failed_id, pending_id, business_id, tech_id, world_id], [item["id"] for item in articles])
         self.assertEqual(
-            {"id", "title", "source", "category", "published_at", "url", "summary_status"},
+            {"id", "title", "source", "category", "published_at", "url", "summary_status", "read_at"},
             set(articles[0]),
         )
         self.assertEqual(["unrequested", "failed", "pending", "done", "done", "done"], [item["summary_status"] for item in articles])
@@ -145,6 +145,35 @@ class ApiTests(unittest.TestCase):
         invalid_limit = self.client.get("/api/articles", params={"limit": 0})
         self.assertEqual(422, invalid_limit.status_code)
 
+    def test_search_matches_stored_fields_and_respects_categories_and_privacy(self) -> None:
+        matching = []
+        for field in ("title", "source", "category", "raw_excerpt", "summary_facts", "summary_impact"):
+            article_id = self.insert_article(field, category="Tech", published_at=None, status="unrequested")
+            with db.get_conn() as conn:
+                conn.execute(f"UPDATE articles SET {field} = ? WHERE id = ?", ("Quantum discovery", article_id))
+            matching.append(article_id)
+        self.insert_article("other", category="World", published_at=None)
+        self.assertEqual(list(reversed(matching)), [row["id"] for row in self.client.get(
+            "/api/articles", params={"q": "  QUANTUM  "}
+        ).json()])
+        response = self.client.get("/api/articles", params={"q": "quantum", "category": "Tech"})
+        self.assertEqual(5, len(response.json()))
+        for row in response.json():
+            self.assertEqual({"id", "title", "source", "category", "published_at", "url", "summary_status", "read_at"}, set(row))
+        self.assertEqual([], self.client.get("/api/articles", params={"q": "Private extracted"}).json())
+        self.assertEqual([], self.client.get("/api/articles", params={"q": "' OR 1=1 --"}).json())
+        self.assertEqual(7, len(self.client.get("/api/articles", params={"q": "  "}).json()))
+        self.assertEqual(422, self.client.get("/api/articles", params={"q": "a" * 201}).status_code)
+
+    def test_search_filters_before_limit_and_treats_wildcards_literally(self) -> None:
+        old_id = self.insert_article("100%_!", category="Tech", published_at="2026-07-01")
+        for index in range(51):
+            self.insert_article(f"newer-{index}", category="Tech", published_at="2026-07-02")
+        for query in ("100%_!", "%", "_", "!"):
+            response = self.client.get("/api/articles", params={"q": query, "limit": 1})
+            self.assertEqual(200, response.status_code)
+            self.assertEqual([old_id], [row["id"] for row in response.json()])
+
     def test_article_detail_has_exact_public_fields_and_hides_full_text(self) -> None:
         article_id = self.insert_article(
             "detail", category="Science", published_at="2026-07-02T12:00:00+00:00"
@@ -164,6 +193,7 @@ class ApiTests(unittest.TestCase):
                 "url",
                 "summary_facts",
                 "summary_impact",
+                "read_at",
             },
             set(article),
         )
@@ -198,6 +228,40 @@ class ApiTests(unittest.TestCase):
                 response = self.client.get(f"/api/articles/{article_id}")
                 self.assertEqual(404, response.status_code)
                 self.assertEqual({"detail": "Article not found"}, response.json())
+
+    def test_read_status_is_persisted_idempotent_and_independent_of_summary(self) -> None:
+        for status in ('unrequested', 'pending', 'failed', 'done'):
+            article_id = self.insert_article(f'read-{status}', category='Tech', published_at=None, status=status)
+            self.assertIsNone(next(row for row in self.client.get('/api/articles').json() if row['id'] == article_id)['read_at'])
+            response = self.client.post(f'/api/articles/{article_id}/read')
+            self.assertEqual(200, response.status_code)
+            self.assertEqual({'read_at'}, set(response.json()))
+            timestamp = response.json()['read_at']
+            self.assertTrue(timestamp.endswith('+00:00'))
+            self.assertEqual(response.json(), self.client.post(f'/api/articles/{article_id}/read').json())
+            db.init_db()
+            row = next(row for row in self.client.get('/api/articles', params={'q': status}).json() if row['id'] == article_id)
+            self.assertEqual(timestamp, row['read_at'])
+            self.assertEqual(status, row['summary_status'])
+            if status == 'done':
+                self.assertEqual(timestamp, self.client.get(f'/api/articles/{article_id}').json()['read_at'])
+        self.assertEqual(404, self.client.post('/api/articles/999999/read').status_code)
+
+    def test_article_progress_endpoint_preserves_privacy_and_authoritative_status(self) -> None:
+        import app.summary_progress as progress_module
+        pending_id = self.insert_article('progress', category='Tech', published_at=None, status='pending')
+        with patch.object(progress_module, '_articles', {}):
+            response = self.client.get(f'/api/articles/{pending_id}/progress')
+            self.assertEqual({'stage': 'queued', 'percentage': 0, 'elapsed_seconds': 0, 'estimated': True}, response.json())
+            progress_module.start_batch([pending_id])
+            progress_module.update_article(pending_id, 'summarizing', 35)
+            response = self.client.get(f'/api/articles/{pending_id}/progress')
+            self.assertEqual({'stage', 'percentage', 'elapsed_seconds', 'estimated'}, set(response.json()))
+            self.assertEqual(35, response.json()['percentage'])
+            with db.get_conn() as conn:
+                conn.execute("UPDATE articles SET summary_status = 'done' WHERE id = ?", (pending_id,))
+            self.assertEqual(100, self.client.get(f'/api/articles/{pending_id}/progress').json()['percentage'])
+        self.assertEqual(404, self.client.get('/api/articles/999999/progress').status_code)
 
     def test_categories_are_distinct_and_sorted(self) -> None:
         response = self.client.get("/api/categories")
@@ -235,6 +299,59 @@ class ApiTests(unittest.TestCase):
             ).json())
             self.assertEqual(404, self.client.post("/api/articles/999999/summarize").status_code)
             worker.assert_not_called()
+
+    def test_regenerate_is_explicit_duplicate_safe_and_replaces_same_article(self) -> None:
+        from app.scheduler import run_requested_summaries
+        article_id = self.insert_article('regenerate', category='Tech', published_at=None)
+        self.client.post(f'/api/articles/{article_id}/read')
+        original = self.client.get(f'/api/articles/{article_id}').json()
+        with patch('app.routes.articles.run_requested_summaries') as worker:
+            self.assertEqual({'summary_status': 'done'}, self.client.post(f'/api/articles/{article_id}/summarize').json())
+            worker.assert_not_called()
+            for _ in range(2):
+                response = self.client.post(f'/api/articles/{article_id}/summarize?regenerate=true')
+                self.assertEqual(200, response.status_code)
+                self.assertEqual({'summary_status': 'pending'}, response.json())
+            worker.assert_called_once_with()
+        db.init_db()
+        with db.get_conn() as conn:
+            row = conn.execute('SELECT summary_status, summary_facts, read_at FROM articles WHERE id = ?', (article_id,)).fetchone()
+            self.assertEqual(('pending', original['summary_facts'], original['read_at']), tuple(row))
+        self.assertEqual(404, self.client.get(f'/api/articles/{article_id}').status_code)
+        self.assertEqual(0, self.client.get(f'/api/articles/{article_id}/progress').json()['percentage'])
+        with patch('app.scheduler.extract_full_text', return_value=('Article text', True)), \
+             patch('app.scheduler.summarize_text', return_value=('New facts', 'New impact')) as model, \
+             patch('app.scheduler.fetch_all_feeds') as rss:
+            run_requested_summaries()
+        model.assert_called_once()
+        rss.assert_not_called()
+        replaced = self.client.get(f'/api/articles/{article_id}').json()
+        self.assertEqual('New facts', replaced['summary_facts'])
+        self.assertEqual('New impact', replaced['summary_impact'])
+        self.assertEqual(original['read_at'], replaced['read_at'])
+        self.assertEqual(original['id'], replaced['id'])
+        self.assertEqual(original['url'], replaced['url'])
+        self.assertEqual(1, len(self.client.get('/api/articles').json()))
+        self.assertEqual(100, self.client.get(f'/api/articles/{article_id}/progress').json()['percentage'])
+        self.assertEqual(404, self.client.post('/api/articles/999999/summarize?regenerate=true').status_code)
+        self.assertEqual(422, self.client.post(f'/api/articles/{article_id}/summarize?regenerate=invalid').status_code)
+
+    def test_failed_regeneration_preserves_previous_text_and_remains_retryable(self) -> None:
+        from app.scheduler import run_requested_summaries
+        article_id = self.insert_article('regeneration-failure', category='Tech', published_at=None)
+        original = self.client.get(f'/api/articles/{article_id}').json()
+        with patch('app.routes.articles.run_requested_summaries'):
+            self.client.post(f'/api/articles/{article_id}/summarize?regenerate=true')
+        with patch('app.scheduler.extract_full_text', return_value=('Article text', True)), \
+             patch('app.scheduler.summarize_text', return_value=None):
+            run_requested_summaries()
+        with db.get_conn() as conn:
+            row = conn.execute('SELECT summary_status, summary_facts, summary_impact FROM articles WHERE id = ?', (article_id,)).fetchone()
+            self.assertEqual(('failed', original['summary_facts'], original['summary_impact']), tuple(row))
+        self.assertEqual(404, self.client.get(f'/api/articles/{article_id}').status_code)
+        with patch('app.routes.articles.run_requested_summaries') as worker:
+            self.assertEqual({'summary_status': 'pending'}, self.client.post(f'/api/articles/{article_id}/summarize').json())
+            worker.assert_called_once_with()
 
     def test_preferences_get_post_and_persist(self) -> None:
         initial = self.client.get("/api/preferences")
