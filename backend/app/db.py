@@ -97,6 +97,13 @@ def init_db() -> None:
             columns = {row["name"] for row in conn.execute("PRAGMA table_info(articles)")}
             if "read_at" not in columns:
                 conn.execute("ALTER TABLE articles ADD COLUMN read_at TEXT")
+            if "summary_version_id" not in columns:
+                conn.execute("ALTER TABLE articles ADD COLUMN summary_version_id TEXT")
+
+        # Preserve existing completed/failed-regeneration output without inventing
+        # model attribution. Idempotent; concurrent initializers use a row claim.
+        from app.summarize.versions import preserve_legacy
+        preserve_legacy(conn)
 
         for feed in STARTER_FEEDS:
             conn.execute(

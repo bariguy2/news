@@ -14,6 +14,7 @@ BACKEND_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BACKEND_DIR))
 
 from app import db  # noqa: E402
+from app.summarize.service import Generation
 
 
 TEMP_DIR = tempfile.TemporaryDirectory()
@@ -116,8 +117,8 @@ def controlled_summary(text, *, on_progress=None):
     if on_progress:
         on_progress('saving', 99)
     if summary_attempts[text] > 1:
-        return ('Regenerated facts are ready.', 'Regenerated impact is ready.')
-    return ('Requested facts are ready.', 'Requested impact is ready.')
+        return Generation('Regenerated facts are ready.', 'Regenerated impact is ready.', 'fixture', 'test', 'v2', 'hash')
+    return Generation('Requested facts are ready.', 'Requested impact is ready.', 'fixture', 'test', 'v2', 'hash')
 
 
 pipeline.summarize_text = controlled_summary

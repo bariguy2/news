@@ -19,7 +19,8 @@ from app.config import (
 from app.db import DatabaseConnection, get_conn
 from app.ingest.extract import extract_full_text
 from app.ingest.rss import fetch_all_feeds
-from app.summarize.ollama_client import Summary, summarize_text
+from app.summarize.service import Generation, summarize_text
+from app.summarize.versions import save_version
 from app.summary_progress import start_batch, update_article, finish_article, interrupt_batch
 
 
@@ -34,12 +35,12 @@ _pipeline_rerun_fetch_requested = False
 
 @dataclass(frozen=True)
 class ArticleResult:
-    """Extraction and summary output returned by a database-free worker."""
+    """Worker output; the coordinator alone publishes article/version changes."""
 
     article_id: int
     extracted_text: str | None
     extraction_ok: bool
-    summary: Summary | None
+    summary: Generation | None
 
 
 def _utc_now() -> datetime:
@@ -113,7 +114,13 @@ def _save_article_result(conn: DatabaseConnection, result: ArticleResult) -> boo
         )
         return False
 
-    facts, impact = result.summary
+    summary = result.summary
+    article = conn.execute('SELECT url FROM articles WHERE id = ?', (result.article_id,)).fetchone()
+    if article is None:
+        return False
+    save_version(conn, result.article_id, article['url'], summary.facts, summary.impact,
+                 provider=summary.provider, model=summary.model, prompt_version=summary.prompt_version,
+                 input_hash=summary.input_hash)
     conn.execute(
         """
         UPDATE articles
@@ -127,8 +134,8 @@ def _save_article_result(conn: DatabaseConnection, result: ArticleResult) -> boo
         (
             result.extracted_text,
             int(result.extraction_ok),
-            facts,
-            impact,
+            summary.facts,
+            summary.impact,
             result.article_id,
         ),
     )

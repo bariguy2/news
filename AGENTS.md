@@ -2,7 +2,7 @@
 
 ## Project purpose
 
-This repository is building a personal, single-user news aggregator that runs locally. It collects stories from a small curated set of RSS feeds, extracts article text, and uses a local Ollama model to produce two-part summaries:
+This repository is building a personal, single-user news aggregator that runs locally. It collects stories from a small curated set of RSS feeds, extracts article text, and uses configurable hosted AI (Groq by default, Gemini alternative, optional local Ollama) to produce shared two-part summaries:
 
 - `FACTS`: a neutral, evidence-focused summary.
 - `IMPACT`: an opinionated explanation of why the story matters.
@@ -39,20 +39,29 @@ The system uses:
 - Extraction: `backend/app/ingest/extract.py` uses `trafilatura` and returns an
   explicit success flag. The pipeline persists successful text and selects the
   RSS excerpt when extraction fails.
-- Summarization: `backend/app/summarize/ollama_client.py` calls local Ollama
-  using the configurable `llama3.1:8b` model, parses literal FACTS/IMPACT
-  sections, caps generation at 512 tokens, and contains model failures.
+- Summarization: `backend/app/summarize/service.py`, `providers.py`, and
+  `settings.py` implement configurable Groq GPT-OSS 120B (default), Gemini
+  3.5 Flash-Lite and optional Ollama llama3.1:8b through HTTPX streaming.
+  Literal FACTS/IMPACT sections are strictly validated. Input is capped at
+  6,000 characters; hosted output defaults to 2,048 tokens including reasoning,
+  Ollama to 512. `usage.py` reserves and settles durable per-attempt estimated
+  charges against independent monthly summary/evaluation allowances. These
+  count list prices even for free-tier calls and never opt into paid billing.
+  `versions.py` archives published summaries; legacy output migrates idempotently.
 - Scheduling: `backend/app/scheduler.py` configures an immediate APScheduler
   interval job inside the FastAPI lifespan. `POST /api/refresh` queues the same
   pipeline through FastAPI background tasks, as does a successful preference
-  update. Each fetch queues at most four newly inserted stories. Other new
-  headlines remain `unrequested` until the reader requests a summary;
+  update. `AUTO_SUMMARY_LIMIT` defaults to zero. New headlines remain
+  `unrequested` until the reader requests a summary;
   `run_requested_summaries()` drains queued work without refetching RSS.
 - REST API: FastAPI exposes unrequested/pending/completed/failed headline lists,
   completed details, per-article summary requests, feed categories,
   single-user preferences, and manual refresh under `/api`. Pydantic response
   models constrain public article fields, and CORS allows the Vite development
   origin at `http://localhost:5173`.
+  Completed summaries are reused; public `regenerate=true` returns 403.
+  Operator regeneration is queued through `python -m app.summarize.manage`.
+  Detail responses include `summary_version_id` for future feedback attribution.
 - Frontend: React Router provides preference-gated onboarding, a
   category-filtered headline feed, and summary detail routes. Vite reads the API
   origin from `VITE_API_BASE`; the feed polls every five seconds while empty or
@@ -70,7 +79,7 @@ The system uses:
 
 The implemented data flow is:
 
-`RSS ingest -> article extraction -> Ollama summarization -> SQLite or PostgreSQL -> REST API -> React UI`
+`RSS ingest -> on-demand extraction -> configurable AI -> SQLite or PostgreSQL -> REST API -> React UI`
 
 Important invariants:
 
@@ -83,6 +92,94 @@ Important invariants:
 - Keep the REST API client-agnostic for later mobile reuse.
 
 ## Current status
+
+### Hosted AI and automated comparison, steps 1–3 (2026-10-21)
+
+The user approved replacing the local-only default with configurable hosted AI,
+shared on-demand summaries and an automated Groq/Gemini comparison. This extends
+the original MVP scope; `docs/plan_mvp.md` now records the approved extension.
+Like/dislike feedback is on the follow-up list, attached to summary versions;
+authentication, multi-user state and public deployment remain deferred.
+
+Done: Groq `openai/gpt-oss-120b` default, Gemini `gemini-3.5-flash-lite`
+alternative and optional Ollama behind one streaming service. HTTPX replaces
+the Ollama SDK. Backend-only dotenv settings select providers/models and limits;
+the launcher validates them before replacing services and skips Ollama in hosted
+mode. No automatic fallback or account/billing upgrades occur. API keys in the
+existing ignored `.env` were not modified or exposed.
+
+Summaries now default to request-only (`AUTO_SUMMARY_LIMIT=0`). Concurrent
+requests atomically reuse pending/completed work. The reader's Summarize again
+button is removed and explicit HTTP regeneration returns 403. From `backend/`,
+`.venv/bin/python -m app.summarize.manage regenerate ID` queues an operator
+replacement for the next scheduler refresh or Refresh feed action. It does not
+launch a competing pipeline. Failed attempts retain previous text; successful
+ones atomically publish an immutable `summary_versions` row and article pointer.
+Existing output migrates with legacy/unknown provenance. Detail responses expose
+only the version ID in addition to existing fields, never full source text.
+
+`ai_budgets` and `ai_attempts` persist reservations, token/reasoning counts,
+latency, safe outcomes and estimated charges. Each attempt reserves before
+network I/O; retries reserve separately. Unknown/interrupted usage retains the
+reservation and explicit rejections refund it. Separate UTC-month allowances
+default to $5 application/$1 evaluation in **list-price-equivalent usage**, even
+on free tiers; these are not paid subscriptions or invoice guarantees. Zero
+blocks hosted calls in that scope. Account free-tier status must be controlled
+in the provider dashboard, not inferred from API keys. Summary history/usage
+survive article purges and feed resets, with no automatic retention cutoff.
+Three new PostgreSQL tables use the private news schema with RLS enabled.
+
+`python -m app.summarize.benchmark export/run` freezes category-balanced stored
+inputs, compares both providers and optionally judges with swapped candidate
+order (default Groq GPT-OSS 20B). It records validity, timing, token/cost totals,
+preferences and review flags under ignored `data/evaluations/`. Resume reuses
+successful calls and includes previous failed-attempt costs; changed inputs or
+model/prompt/price/evaluator settings require a new output directory. Quota,
+credential and budget limits pause the run (CLI exit 2) until an operator resumes.
+The judge is fallible and can share a model family with a candidate; no automatic
+production switching occurs. README documents commands, configuration, limits,
+manual review, local mode and retained history.
+
+Verification:
+
+- From `backend/`, `.venv/bin/python -m unittest discover -s tests -q` runs
+  87 tests: 83 pass and four opt-in PostgreSQL tests skip without a test URL.
+  `.venv/bin/python -m compileall -q app tests` passes. Coverage includes
+  concurrent requests/reservations, retries, quota rejection, interrupted usage,
+  streaming parsing and reasoning accounting, metadata-only API shapes,
+  legacy/version preservation, operator regeneration, benchmark resume and
+  changed-profile rejection.
+- Two new opt-in PostgreSQL tests passed on the configured connection using
+  only connection-local temporary tables: reservation/settlement/rollback and
+  legacy migration/version replacement/deletion retention. Existing application
+  tables were not initialized, migrated, reset or written by this check.
+- All 24 frontend tests, the production build (30 modules), and all three shell
+  suites (start/reset-feed/kill) pass. The launcher checks include hosted startup
+  without an Ollama executable and preservation of dotenv secrets/precedence.
+- Chrome E2E on isolated ports 18000/15173 passes onboarding/filter/search,
+  on-demand generation, progress animation/immediate completion, persisted read
+  state, summary reuse, source navigation and blocked public regeneration.
+  `news-hosted-detail-mobile.png` was visually inspected at 390 px: sections and
+  source button fit without overflow. No reader regeneration action remains.
+- Real Groq/Gemini streaming and both judge orders succeeded on one frozen
+  existing article. Both outputs contain validated FACTS/IMPACT and recorded
+  usage; the report flags coverage differences for review. Accounting was
+  isolated in `data/evaluations/hosted-smoke/usage.db`; production data was only
+  read to export input. This is an integration smoke test, not evidence of a
+  general quality winner. Only one usable stored article was available; the
+  representative 30–50 article quality study remains follow-up work.
+- `uv sync --locked` and `git diff --check` pass. Test commands exited normally; ports 18000/15173
+  have no listeners and no test API/Vite/browser/benchmark processes remain.
+  Pre-existing backend PID 76465 and Vite PID 76489 (started October 19) were
+  preserved. The backend is not reloading and needs a restart to activate this
+  change and apply idempotent schema initialization. No service restart or
+  application data reset was performed. The user requested a separate local
+  commit for hosted AI before developer-setup housekeeping; no push is requested.
+
+Next: restart the app when ready, collect a representative frozen comparison
+set, review its flags/sample, then implement version-linked like/dislike feedback.
+The app still requires one backend process; distributed job claims and per-user
+quotas are not implemented. Older entries below describe historical behavior.
 
 ### dev-hjc rebased onto main 21c4ca1 (2026-10-19)
 
@@ -1236,7 +1333,7 @@ Do not claim a planned component exists. As files and features are added, replac
 2. Inspect the current repository and this file; do not assume the planned layout has already been created.
 3. Keep changes scoped to the current plan step. Avoid speculative abstractions and out-of-scope production infrastructure.
 4. Preserve the intended simple seams: plain SQLite access, a client-neutral REST API, and an isolated summarizer/model configuration.
-5. Handle external failures explicitly. RSS, article extraction, and Ollama are unreliable boundaries and should fail without taking down the pipeline.
+5. Handle external failures explicitly. RSS, article extraction, and AI providers are unreliable boundaries and should fail without taking down the pipeline.
 6. Add focused automated tests with each behavior wherever practical. Do not defer all testing until the end of the plan.
 7. Run the relevant tests and perform the integration or manual checks required by the plan before updating status.
 8. Document verified setup, run, test, lint, and migration commands here as they become real. Never present an untested command as known-working.

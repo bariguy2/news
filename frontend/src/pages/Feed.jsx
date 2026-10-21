@@ -172,7 +172,7 @@ function Feed() {
         <div>
           <p className="eyebrow">Local news</p>
           <h1>Your briefing</h1>
-          <p className="lede">The four newest stories from each fetch get AI summaries. Choose which other stories to summarize.</p>
+          <p className="lede">Choose a story to summarize. Ready summaries are saved for everyone to read.</p>
         </div>
         {categories.length > 0 && (
           <div className="active-categories" aria-label="Selected categories">

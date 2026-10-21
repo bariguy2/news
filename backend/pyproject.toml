@@ -7,8 +7,9 @@ dependencies = [
     "apscheduler",
     "fastapi",
     "feedparser",
-    "ollama",
+    "httpx",
     "psycopg[binary]",
+    "python-dotenv",
     "trafilatura",
     "uvicorn[standard]",
 ]

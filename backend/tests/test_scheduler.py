@@ -8,6 +8,13 @@ from unittest.mock import ANY, MagicMock, patch
 
 import app.scheduler as scheduler_module
 import app.summary_progress as progress_module
+from app.summarize.service import Generation
+
+
+def summary(facts, impact):
+    return Generation(facts, impact, "fixture", "test", "test", "hash")
+
+
 from app import db
 from app.config import REFRESH_INTERVAL_MINUTES
 from app.scheduler import PIPELINE_JOB_ID, create_scheduler, run_pipeline
@@ -122,7 +129,7 @@ class PipelineTests(unittest.TestCase):
                 if not release_second.wait(5):
                     raise RuntimeError('test release timed out')
                 return None
-            return ('Facts', 'Impact')
+            return summary('Facts', 'Impact')
 
         with patch.object(scheduler_module, 'PIPELINE_CONCURRENCY', 1), \
              patch.object(scheduler_module, 'extract_full_text', return_value=('Text', True)), \
@@ -212,7 +219,7 @@ class PipelineTests(unittest.TestCase):
                             (newest_id,),
                         ).fetchone()[0]
                     )
-            return f"Facts for {text}", f"Impact for {text}"
+            return summary(f"Facts for {text}", f"Impact for {text}")
 
         with (
             patch("app.scheduler.PIPELINE_CONCURRENCY", 1),
@@ -288,7 +295,7 @@ class PipelineTests(unittest.TestCase):
                     ).fetchone()[0]
                     == 1
                 )
-            return "Fresh facts", "Fresh impact"
+            return summary("Fresh facts", "Fresh impact")
 
         with (
             patch("app.scheduler.fetch_all_feeds", side_effect=ingest),
@@ -325,7 +332,7 @@ class PipelineTests(unittest.TestCase):
         def summarize(text: str, **_kwargs):
             if "fails" in text:
                 return None
-            return "Facts", "Impact"
+            return summary("Facts", "Impact")
 
         def extract(url: str):
             return f"Extracted text for {url}", True
@@ -374,7 +381,7 @@ class PipelineTests(unittest.TestCase):
             patch("app.scheduler.PIPELINE_CONCURRENCY", 1),
             patch("app.scheduler.extract_full_text", side_effect=extract),
             patch(
-                "app.scheduler.summarize_text", return_value=("Facts", "Impact")
+                "app.scheduler.summarize_text", return_value=summary("Facts", "Impact")
             ) as summarize_mock,
             self.assertLogs("app.scheduler", level="ERROR") as logs,
         ):
@@ -407,7 +414,7 @@ class PipelineTests(unittest.TestCase):
         self.assertTrue(any("database issue" in line for line in logs.output))
 
     @patch("app.scheduler.fetch_all_feeds", return_value=[])
-    @patch("app.scheduler.summarize_text", return_value=("Facts", "Impact"))
+    @patch("app.scheduler.summarize_text", return_value=summary("Facts", "Impact"))
     def test_processes_three_articles_concurrently(
         self, _summarize_mock, _fetch_mock
     ) -> None:
@@ -469,6 +476,7 @@ class PipelineTests(unittest.TestCase):
         self.assertTrue(any("rerun queued" in line for line in logs.output))
         self.assertTrue(any("Starting queued" in line for line in logs.output))
 
+    @patch("app.scheduler.AUTO_SUMMARY_LIMIT", 4)
     def test_only_four_newest_new_articles_are_automatically_queued(self) -> None:
         backlog_id = self.insert_article(
             "https://example.com/backlog", summary_status="unrequested"
@@ -488,7 +496,7 @@ class PipelineTests(unittest.TestCase):
         with (
             patch("app.scheduler.fetch_all_feeds", side_effect=ingest),
             patch("app.scheduler.extract_full_text", return_value=("Text", True)) as extract,
-            patch("app.scheduler.summarize_text", return_value=("Facts", "Impact")),
+            patch("app.scheduler.summarize_text", return_value=summary("Facts", "Impact")),
         ):
             run_pipeline()
         self.assertEqual(4, extract.call_count)
@@ -507,6 +515,19 @@ class PipelineTests(unittest.TestCase):
             run_pipeline()
         extract.assert_not_called()
 
+    def test_default_ingestion_keeps_new_headlines_unrequested(self):
+        new_ids = []
+        def ingest(conn, categories, *, now):
+            new_ids.append(self.insert_article('https://example.com/on-demand', summary_status='unrequested'))
+            return new_ids
+        with patch('app.scheduler.fetch_all_feeds', side_effect=ingest), \
+             patch('app.scheduler.AUTO_SUMMARY_LIMIT', 0), \
+             patch('app.scheduler.summarize_text') as model:
+            run_pipeline()
+        model.assert_not_called()
+        with db.get_conn() as conn:
+            self.assertEqual('unrequested', conn.execute('SELECT summary_status FROM articles WHERE id = ?', (new_ids[0],)).fetchone()[0])
+
     def test_requested_summary_runs_without_rss_or_selected_categories(self) -> None:
         self.set_categories([])
         queued_id = self.insert_article("https://example.com/requested")
@@ -516,7 +537,7 @@ class PipelineTests(unittest.TestCase):
         with (
             patch("app.scheduler.fetch_all_feeds") as fetch,
             patch("app.scheduler.extract_full_text", return_value=("Text", True)),
-            patch("app.scheduler.summarize_text", return_value=("Facts", "Impact")),
+            patch("app.scheduler.summarize_text", return_value=summary("Facts", "Impact")),
         ):
             scheduler_module.run_requested_summaries()
         fetch.assert_not_called()

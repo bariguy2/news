@@ -6,6 +6,8 @@ from unittest.mock import MagicMock, patch
 
 from fastapi.testclient import TestClient
 
+from app.summarize.service import Generation
+from app.summarize.manage import queue_regeneration
 from app import db
 from app.main import app
 
@@ -194,6 +196,7 @@ class ApiTests(unittest.TestCase):
                 "summary_facts",
                 "summary_impact",
                 "read_at",
+                "summary_version_id",
             },
             set(article),
         )
@@ -308,11 +311,11 @@ class ApiTests(unittest.TestCase):
         with patch('app.routes.articles.run_requested_summaries') as worker:
             self.assertEqual({'summary_status': 'done'}, self.client.post(f'/api/articles/{article_id}/summarize').json())
             worker.assert_not_called()
-            for _ in range(2):
-                response = self.client.post(f'/api/articles/{article_id}/summarize?regenerate=true')
-                self.assertEqual(200, response.status_code)
-                self.assertEqual({'summary_status': 'pending'}, response.json())
-            worker.assert_called_once_with()
+            response = self.client.post(f'/api/articles/{article_id}/summarize?regenerate=true')
+            self.assertEqual(403, response.status_code)
+            worker.assert_not_called()
+            self.assertEqual('queued', queue_regeneration(article_id))
+            self.assertEqual('already_pending', queue_regeneration(article_id))
         db.init_db()
         with db.get_conn() as conn:
             row = conn.execute('SELECT summary_status, summary_facts, read_at FROM articles WHERE id = ?', (article_id,)).fetchone()
@@ -320,7 +323,7 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(404, self.client.get(f'/api/articles/{article_id}').status_code)
         self.assertEqual(0, self.client.get(f'/api/articles/{article_id}/progress').json()['percentage'])
         with patch('app.scheduler.extract_full_text', return_value=('Article text', True)), \
-             patch('app.scheduler.summarize_text', return_value=('New facts', 'New impact')) as model, \
+             patch('app.scheduler.summarize_text', return_value=Generation('New facts', 'New impact', 'fixture', 'test', 'v2', 'hash')) as model, \
              patch('app.scheduler.fetch_all_feeds') as rss:
             run_requested_summaries()
         model.assert_called_once()
@@ -331,17 +334,32 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(original['read_at'], replaced['read_at'])
         self.assertEqual(original['id'], replaced['id'])
         self.assertEqual(original['url'], replaced['url'])
+        self.assertIsNotNone(replaced['summary_version_id'])
+        with db.get_conn() as conn:
+            versions = conn.execute('SELECT * FROM summary_versions WHERE article_id = ?', (article_id,)).fetchall()
+            self.assertEqual(2, len(versions))
+            self.assertEqual({original['summary_facts'], 'New facts'}, {row['facts'] for row in versions})
+            self.assertEqual({'legacy', 'fixture'}, {row['provider'] for row in versions})
         self.assertEqual(1, len(self.client.get('/api/articles').json()))
         self.assertEqual(100, self.client.get(f'/api/articles/{article_id}/progress').json()['percentage'])
-        self.assertEqual(404, self.client.post('/api/articles/999999/summarize?regenerate=true').status_code)
+        self.assertEqual(403, self.client.post('/api/articles/999999/summarize?regenerate=true').status_code)
+        self.assertEqual('not_found', queue_regeneration(999999))
         self.assertEqual(422, self.client.post(f'/api/articles/{article_id}/summarize?regenerate=invalid').status_code)
+
+    def test_simultaneous_readers_queue_only_one_worker(self):
+        from concurrent.futures import ThreadPoolExecutor
+        article_id = self.insert_article('concurrent', category='Tech', published_at=None, status='unrequested')
+        with patch('app.routes.articles.run_requested_summaries') as worker:
+            with ThreadPoolExecutor(max_workers=6) as executor:
+                responses = list(executor.map(lambda _: self.client.post(f'/api/articles/{article_id}/summarize'), range(12)))
+        self.assertTrue(all(response.status_code == 200 for response in responses))
+        worker.assert_called_once_with()
 
     def test_failed_regeneration_preserves_previous_text_and_remains_retryable(self) -> None:
         from app.scheduler import run_requested_summaries
         article_id = self.insert_article('regeneration-failure', category='Tech', published_at=None)
         original = self.client.get(f'/api/articles/{article_id}').json()
-        with patch('app.routes.articles.run_requested_summaries'):
-            self.client.post(f'/api/articles/{article_id}/summarize?regenerate=true')
+        self.assertEqual('queued', queue_regeneration(article_id))
         with patch('app.scheduler.extract_full_text', return_value=('Article text', True)), \
              patch('app.scheduler.summarize_text', return_value=None):
             run_requested_summaries()

@@ -77,6 +77,16 @@ mkdir -p \
     "$FAKE_BIN"
 cp "$SOURCE_ROOT/scripts/start.sh" "$TEST_ROOT/scripts/start.sh"
 chmod +x "$TEST_ROOT/scripts/start.sh"
+mkdir -p "$TEST_ROOT/backend/app/summarize"
+cp "$SOURCE_ROOT/backend/app/__init__.py" "$TEST_ROOT/backend/app/"
+cp "$SOURCE_ROOT/backend/app/summarize/"{__init__,settings}.py "$TEST_ROOT/backend/app/summarize/"
+export NEWS_TEST_PYTHON="$SOURCE_ROOT/backend/.venv/bin/python"
+cat >"$TEST_ROOT/backend/.venv/bin/python" <<'EOF'
+#!/usr/bin/env bash
+exec "$NEWS_TEST_PYTHON" "$@"
+EOF
+chmod +x "$TEST_ROOT/backend/.venv/bin/python"
+export SUMMARY_PROVIDER=ollama
 
 cat >"$FAKE_BIN/curl" <<'EOF'
 #!/usr/bin/env bash
@@ -198,6 +208,19 @@ fi
 [[ "$conflict_output" == *"Backend port 8000 is already served by an untracked process"* ]] || \
     fail "untracked backend conflict was not reported"
 assert_running "$ollama_pid"
+
+unset FAKE_UNTRACKED_BACKEND
+# Dotenv selects hosted mode; no Ollama executable is needed or invoked.
+unset SUMMARY_PROVIDER
+printf '%s\n' 'SUMMARY_PROVIDER=groq' 'GROQ_API_KEY=fixture-key' >"$TEST_ROOT/backend/.env"
+mv "$FAKE_BIN/ollama" "$FAKE_BIN/ollama-disabled"
+hosted_output="$($TEST_ROOT/scripts/start.sh)"
+[[ "$hosted_output" == *"Using hosted AI (groq)"* ]] || fail "dotenv provider not selected"
+assert_running "$ollama_pid"
+# An exported provider takes precedence over dotenv, without exposing the key.
+SUMMARY_PROVIDER=ollama override_output="$(SUMMARY_PROVIDER=ollama "$TEST_ROOT/scripts/start.sh")"
+[[ "$override_output" == *"Ollama is already running"* ]] || fail "environment precedence broken"
+[[ "$hosted_output" != *"fixture-key"* ]] || fail "credential appeared in launcher output"
 
 cleanup
 trap - EXIT

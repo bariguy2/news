@@ -1,5 +1,47 @@
 # News Aggregator Prototype — Implementation Plan
 
+## Approved extension: hosted AI, steps 1–3 (2026-10-21)
+
+This extension supersedes the original local-only AI, automatic-summary and
+reader-regeneration decisions below. The original MVP plan remains historical
+context; AGENTS.md records current implementation and verification.
+
+1. **Provider interface:** default Groq GPT-OSS 120B, configurable Gemini
+   3.5 Flash-Lite and optional Ollama through one streaming interface. Keep
+   backend-only keys, literal FACTS/IMPACT parsing, bounded input/output,
+   timeouts/retries, per-article failure containment and existing progress UI.
+2. **Shared summaries and cost controls:** generate on request by default;
+   concurrent/repeated requests reuse a pending or completed article. Remove
+   public regeneration and provide an operator CLI. Persist immutable summary
+   versions and migrate existing output without discarding it. Reserve estimated
+   list-price usage atomically before every call and retry, with independent
+   monthly application/evaluation allowances. Keep accounts on free tiers; an
+   allowance is not permission to enable paid billing. No automatic fallback.
+3. **Automated comparison:** freeze representative stored inputs and compare
+   Groq/Gemini offline in the same service code. Record validity, latency,
+   tokens, estimated cost, and source-grounded AI judgments with swapped order.
+   Save resumable artifacts and flag a small sample for human review. Pause on
+   budget/quota/credential limits; never automatically change the production
+   provider. Target 30–50 representative cases for a quality decision; a small
+   live integration smoke test alone cannot establish the best model.
+
+Acceptance checks: real provider calls produce validated sections and usage;
+mocked failures cannot leak keys or crash the service; concurrent reservations
+respect limits and survive restart; duplicate summary requests queue once;
+SQLite/PostgreSQL preserve legacy/version history; public regeneration is
+blocked and operator replacement preserves old output; comparison resume
+avoids duplicate successful calls; Chrome verifies onboarding, requests,
+progress, read state, details and source navigation. Existing automated suites
+remain required. Real provider checks use isolated accounting, and PostgreSQL
+checks use only connection-local temporary tables.
+
+The application still runs one local backend process and has shared preferences
+and read state. Accounts, authentication, per-user quotas, distributed workers,
+public deployment and mobile clients remain deferred. **Next planned feature:**
+like/dislike feedback attached to a specific summary version, with duplicate
+feedback handling once user identity is designed. No custom LLM training is
+part of this phase.
+
 ## Context
 
 The goal is a personal, local prototype of a Google-News-style aggregator: instead of full articles, each item gets an AI-generated two-part summary (facts/evidence, then an opinionated "impact" paragraph), with a link out to the original source. A one-time onboarding questionnaire captures category interests (Tech, World, Sports, etc.) used to filter the main feed. Tapping a headline opens a detail view with the full summary and a link to the original article.

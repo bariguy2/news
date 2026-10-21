@@ -60,6 +60,7 @@ class ArticleDetail(BaseModel):
     summary_facts: str
     summary_impact: str
     read_at: str | None
+    summary_version_id: str | None
 
 
 @router.get("/articles", response_model=list[ArticleListItem])
@@ -122,8 +123,10 @@ def mark_article_read(article_id: int) -> dict[str, str]:
 
 @router.post("/articles/{article_id}/summarize", response_model=SummaryRequest)
 def request_summary(article_id: int, background_tasks: BackgroundTasks, regenerate: bool = False) -> dict[str, str]:
-    """Queue once; replacing a completed summary requires explicit opt-in."""
-    eligible = ['unrequested', 'failed', 'done'] if regenerate else ['unrequested', 'failed']
+    """Queue once. Regeneration is an operator-only CLI action."""
+    if regenerate:
+        raise HTTPException(status_code=403, detail="Regeneration is restricted to the operator command")
+    eligible = ['unrequested', 'failed']
     placeholders = ', '.join('?' for _ in eligible)
     with get_conn() as conn:
         queued = conn.execute(
@@ -151,7 +154,7 @@ def get_article(article_id: int) -> dict[str, object]:
         row = conn.execute(
             """
             SELECT id, title, source, category, published_at, url,
-                   summary_facts, summary_impact, read_at
+                   summary_facts, summary_impact, read_at, summary_version_id
             FROM articles
             WHERE id = ? AND summary_status = 'done'
             """,
