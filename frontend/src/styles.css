@@ -399,10 +399,6 @@ h1 {
   width: min(100% - 2rem, 58rem);
 }
 
-.resummary-actions { margin-top: 2rem; }
-.resummary-actions > p { margin: 0.65rem 0 0; color: var(--muted); line-height: 1.5; font-size: 0.9rem; }
-.resummary-actions button:disabled { opacity: 0.6; cursor: wait; }
-.resummary-actions + .source-link { margin-top: 0.75rem; }
 
 .back-link {
   display: inline-flex;

@@ -5,55 +5,61 @@
 > production use.
 
 A single-user news briefing that runs locally on Windows or macOS. It collects a curated set of
-RSS feeds, extracts article text, creates local FACTS and IMPACT summaries with
-Ollama, and serves a category-filtered React interface.
+RSS feeds, extracts article text, creates shared FACTS and IMPACT summaries with
+configurable hosted AI, and serves a category-filtered React interface.
 
 ## Prerequisites
 
 - Windows (PowerShell), or macOS with Homebrew
 - Python 3.12 managed by `uv`
 - Node.js and npm
-- Ollama with `llama3.1:8b`
+- A Groq API key (default), or Gemini API key; Ollama is optional for local mode
 
-On macOS, install the local tools and model:
+On macOS, install uv:
 
 ```sh
-brew install uv ollama
-ollama pull llama3.1:8b
+brew install uv
 ```
 
 Install project dependencies:
 
 ```sh
 cd backend
-uv sync
+uv sync --locked
 
 cd ../frontend
-npm install
+npm ci
 cp .env.example .env
 ```
+
+Create `backend/.env` from `backend/.env.example` **only if it does not already
+exist**, then set `GROQ_API_KEY`. Keep all AI keys on the backend. To use Gemini
+instead, set `SUMMARY_PROVIDER=gemini` and `GEMINI_API_KEY`. Both keys are needed
+for the optional comparison tool. Restart the backend after configuration changes.
+
+Start with free-tier accounts; no paid subscription is required by the app.
+Free quotas are limited, and the app cannot determine billing status from an API
+key. Keep paid billing disabled in the provider dashboards if zero charges are
+required. The app never upgrades accounts or falls back to another provider.
 
 ## Quick start
 
 ### Windows (PowerShell)
 
-This PC has Python 3.12 managed by uv, the locked backend/frontend dependencies,
-and Ollama installed. Open a new terminal after installation to refresh PATH.
+Use Python 3.12 managed by uv and the locked backend/frontend dependencies.
+Open a new terminal after installation to refresh PATH.
 For future dependency installs, run `uv sync --locked` in `backend` and
 `npm.cmd ci` in `frontend`. Copy `frontend/.env.example` to `frontend/.env`
 if the latter does not exist.
 
-Run these commands in three separate PowerShell terminals from the repository root:
+Run these commands in two separate PowerShell terminals from the repository root:
 
 ```powershell
-# Terminal 1 (only if the Ollama desktop app is not already serving)
-& "$env:LOCALAPPDATA\Programs\Ollama\ollama.exe" serve
+# Terminal 1
+cd backend
+.\.venv\Scripts\python.exe -m uvicorn app.main:app --reload --port 8000 --env-file .env
 
 # Terminal 2
-cd backend
-.\.venv\Scripts\python.exe -m uvicorn app.main:app --reload --port 8000
-
-# Terminal 3
 cd frontend
 npm.cmd run dev
 ```
@@ -77,8 +83,10 @@ Launch the complete app in the background from the repository root:
 ./scripts/start.sh
 ```
 
-The script starts Ollama only when its local service is unavailable, then starts
-the backend and frontend. It prints [http://localhost:5173](http://localhost:5173)
+The script validates AI configuration, then starts the backend and frontend.
+Hosted mode does not require or start Ollama. With `SUMMARY_PROVIDER=ollama`,
+it starts Ollama only when its local service is unavailable.
+It prints [http://localhost:5173](http://localhost:5173)
 after both servers are ready and returns control to the terminal. Running it
 again stops and replaces only the backend and frontend previously started by
 the script; it never stops Ollama. It refuses to replace an untracked process
@@ -113,7 +121,10 @@ This is a destructive full-feed reset of the **configured database**, including
 Supabase when `DATABASE_URL` is set. It uses the same `backend/.env` and exported
 variable precedence as the launcher. Every article is deleted and current
 category selections are cleared in one transaction before the app restarts at
-onboarding; feeds and schema are preserved. A failed reset rolls back and does
+onboarding; feeds, summary-version history, and AI usage records are preserved.
+History retains summary text and source URLs after article deletion. Reset is
+not a complete data-erasure command and cannot reset the usage allowance.
+A failed reset rolls back and does
 not relaunch the app. A missing local SQLite database is a no-op.
 The queued refresh does no feed work until you select categories again.
 
@@ -121,28 +132,20 @@ Use the manual commands below when active development requires backend reloads.
 
 ## Run locally
 
-The app uses three local processes. Keep each command running in its own
-terminal.
+Hosted mode uses two local processes. Keep each command running in its own
+terminal. Start the REST API and background pipeline:
 
-1. Start Ollama (the macOS app can provide the same service):
+```sh
+cd backend
+.venv/bin/uvicorn app.main:app --reload --port 8000 --env-file .env
+```
 
-   ```sh
-   ollama serve
-   ```
+Start the web interface:
 
-2. Start the REST API and background pipeline:
-
-   ```sh
-   cd backend
-   .venv/bin/uvicorn app.main:app --reload --port 8000
-   ```
-
-3. Start the web interface:
-
-   ```sh
-   cd frontend
-   npm run dev
-   ```
+```sh
+cd frontend
+npm run dev
+```
 
 Open [http://localhost:5173](http://localhost:5173). The frontend reads
 `VITE_API_BASE=http://localhost:8000` from `frontend/.env`.
@@ -150,10 +153,9 @@ Open [http://localhost:5173](http://localhost:5173). The frontend reads
 The scheduler runs immediately when the backend starts and then every 30
 minutes. Before onboarding it has no selected categories and does no feed work.
 Saving preferences triggers an immediate refresh that ingests only the selected
-categories and only stories from the latest 48 hours. Up to three recent
-articles are extracted and summarized concurrently with the local 8B model.
-Each fetch automatically queues only its four newest new stories. Other
-headlines ask whether you want an AI summary: choose **Summarize** on an
+categories and only stories from the latest 48 hours. Up to three requested
+articles are extracted and summarized concurrently. Automatic generation is
+off by default (`AUTO_SUMMARY_LIMIT=0`). Choose **Summarize** on an
 article to queue it, or follow its original-source link. Untouched stories
 remain waiting across refreshes and restarts. Failed summaries show a
 **Retry summary** button. Existing queued summaries resume after restart.
@@ -168,20 +170,21 @@ To request one summary through the API, use
 `POST /api/articles/{id}/summarize`. Repeated requests reuse queued or completed
 work. This processes queued articles without refetching feeds.
 
-Open a completed article and choose **Summarize again** to request a fresh
-FACTS/IMPACT summary. The app returns to the feed so you can follow that
-article's progress. The request button disables while submitting and offers
-an inline error if queuing fails. Existing article identity and read status
-are preserved; no duplicate article is created.
+All clients read the same saved summary for an article. Opening it does not call
+AI again. The public Summarize again action is removed and
+`POST /api/articles/{id}/summarize?regenerate=true` returns 403. An operator can
+queue a replacement from `backend/`:
 
-The API opt-in is `POST /api/articles/{id}/summarize?regenerate=true`.
-Without that flag, requests continue to reuse completed summaries. Repeated
-requests while pending reuse the queued work. A successful attempt replaces
-both summary sections. If generation fails, previous summary text remains in
-storage, the card shows failed with Retry summary, and the done-only detail
-route remains unavailable until a successful retry. Pending work resumes after
-restart as usual. Regeneration uses the existing extraction/model pipeline;
-it does not fetch the RSS feeds again or guarantee different wording.
+```sh
+.venv/bin/python -m app.summarize.manage regenerate 123
+```
+
+This queues work for the next scheduler refresh or **Refresh feed** action;
+it does not launch another worker. Successful replacements publish a new
+immutable version and preserve earlier versions and read state. Failures keep
+the old stored sections but use the existing failed-card/retry flow; pending or
+failed details remain unavailable. Detail responses include `summary_version_id`.
+Startup archives existing summaries as `legacy` with unknown model attribution.
 
 Use **Search articles** at the top of the feed to find fetched stories in your
 selected categories. Search ignores letter case and matches a literal phrase
@@ -205,7 +208,7 @@ This is still a single-user app: the read state is shared by clients using the
 same database and is removed when its article is purged or the feed is reset.
 
 Each requested article has its own progress bar. Queued articles start at 0%,
-reading the article starts at 2%, and streamed Ollama output advances an
+reading the article starts at 2%, and streamed model output advances an
 **Estimated** percentage from 10% up to 95%. A valid two-section response moves
 to Saving at 99%; **100% is reserved for a successful database commit**. Failed
 attempts stop below 100% and retain the Retry summary action. Untouched articles
@@ -222,8 +225,8 @@ transition. Reduced-motion preferences disable this animation. This visual
 transition does not create additional model progress or advance past the latest
 reported value.
 
-The generation estimate uses emitted characters
-against the configured output budget (approximately four characters per token).
+The generation estimate uses emitted visible characters against a 2,048-character
+target; hidden reasoning is excluded. This target is separate from token limits.
 It cannot know the final output length or remaining time: the bar may pause or
 jump as stages complete and is explicitly labeled estimated. Format retries
 change the stage without decreasing the estimate. It does not advance from a
@@ -233,7 +236,88 @@ timer while the model is stalled. Progress-request failures offer Retry progress
 and estimated. It does not expose article text or partially generated summaries.
 Tracking lives in memory for the current single-process backend. After a
 restart, persisted pending work resumes from a fresh estimate; completed and
-failed states remain authoritative in the database. No schema change is needed.
+failed states remain authoritative in the database.
+
+## AI configuration and usage safeguards
+
+`SUMMARY_PROVIDER=groq` uses `openai/gpt-oss-120b`; `gemini` uses
+`gemini-3.5-flash-lite`. Set `GROQ_MODEL` or `GEMINI_MODEL` to change models.
+Custom models require explicit `*_INPUT_USD_PER_MILLION` and
+`*_OUTPUT_USD_PER_MILLION` prices. Default rates are based on the
+[Groq model list](https://console.groq.com/docs/models) and
+[Gemini pricing](https://ai.google.dev/gemini-api/docs/pricing).
+These rate cards need updating when provider prices change.
+
+`AI_MONTHLY_BUDGET_USD=5` and `AI_EVAL_MONTHLY_BUDGET_USD=1` are separate monthly
+**list-price-equivalent usage allowances**, not subscriptions, actual invoice
+amounts, or paid-tier opt-ins. Even free calls count against them. Set either to
+zero to block hosted calls for that scope. Reservations are committed before
+every attempt, including retries, so concurrent calls cannot reserve beyond
+the allowance. Reported input/output usage settles reservations; output includes
+reasoning tokens. Interrupted calls or missing usage retain the conservative
+reservation. Accounting survives resets/restarts and uses UTC calendar months.
+These estimates cannot guarantee an invoice amount, particularly if provider
+prices change; provider billing settings remain authoritative.
+
+Defaults: 6,000 source characters, 2,048 hosted output tokens including reasoning,
+60-second request timeout, at most two attempts, and three concurrent calls per
+process. Configuration is documented in `backend/.env.example`. Quota (429) and
+credential errors stop an article attempt without retry or provider fallback.
+Other transient/format failures have bounded retries; every attempt is recorded.
+View persisted usage from `backend/`:
+
+```sh
+.venv/bin/python -m app.summarize.manage usage
+```
+
+Amounts are integer nanodollars (`used_nano / 1e9` gives estimated USD). The
+`ai_attempts` table records provider/model, prompt version/hash, tokens, latency,
+outcome and estimated charge without storing credentials or reasoning text.
+Summary history and usage currently have no automatic retention limit.
+
+Run one backend process; pipeline coordination and progress are process-local.
+This remains a single-user prototype, without authentication, per-user quotas,
+distributed job claims, or public deployment controls.
+
+For local generation, set `SUMMARY_PROVIDER=ollama`, install Ollama, pull
+`llama3.1:8b`, and start `ollama serve` before manual API startup. The macOS
+launcher handles starting its service. Local calls use the same interface and
+record zero estimated cost; no automatic fallback to Ollama occurs.
+
+## Automated Groq/Gemini comparison
+
+One application is enough: the offline runner sends the same frozen source text
+to both providers without changing published summaries. From `backend/`:
+
+```sh
+.venv/bin/python -m app.summarize.benchmark export --output ../data/evaluations/cases.json --limit 40
+.venv/bin/python -m app.summarize.benchmark run --input ../data/evaluations/cases.json --output ../data/evaluations/run-1
+```
+
+Export samples stored text across categories, falling back to RSS excerpts, and
+refuses to overwrite the input. It may export fewer cases if insufficient usable
+text exists. Aim for 30–50 representative articles before deciding on quality.
+The default evaluator is Groq GPT-OSS 20B with candidate order swapped. It scores
+source faithfulness, coverage, clarity, and grounded impact. It can be biased or
+wrong and is not an external fact checker. Use `--judge none` to skip judging or
+`--judge gemini` / `--judge ollama` for the selected provider's configured model.
+
+The runner saves `manifest.json`, `results.json`, and `report.md`, including
+valid-output rate, latency, token/cost totals including retries, order-consistent
+preferences, flagged cases, and a small review sample. Check flagged cases and
+the sample against their sources before selecting a provider; switching is
+always explicit. Automated checks reduce review, but cannot prove factual truth.
+
+Calls are paced 30 seconds apart (`--pause-seconds`), use the separate evaluation
+allowance, and pause on budget/quota/credential limits (CLI exit 2). Resume the
+same command after resolving the limit; successful calls are reused. Input,
+model, price, prompt, or evaluator changes require a new output directory.
+Other terminal failures remain saved; use a new run to retest them. After a
+crash, remove `running.lock` only after verifying its process has exited.
+Artifacts contain source text and stay under ignored `data/evaluations/`.
+
+Likes/dislikes tied to summary versions, user accounts, and public hosting are
+follow-up work; this change lays the foundation without adding those features.
 
 By default, runtime data stays in the ignored `data/news.db`. To store it in
 Supabase Postgres, create a Supabase project and copy its **Session pooler**
@@ -280,10 +364,11 @@ On macOS, check the launcher, reset, and stop scripts from the repository root:
 ```
 
 These use temporary services and data. The backend suite also includes opt-in
-PostgreSQL reset tests: with `NEWS_TEST_POSTGRES_URL` set privately in your
+PostgreSQL reset and hosted-AI storage tests: with `NEWS_TEST_POSTGRES_URL` set privately in your
 environment, run `.venv/bin/python -m unittest discover -s tests -p
 'test_reset_feed_postgres.py'` from `backend/`. They use connection-local temporary
-tables, leaving the application's `news` tables untouched.
+tables, leaving the application's `news` tables untouched. Use the pattern
+`test_hosted_postgres.py` for budget settlement, version migration and retention.
 
 Frontend component and production-build checks:
 

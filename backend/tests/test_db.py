@@ -62,7 +62,7 @@ class DatabaseTests(unittest.TestCase):
             ).fetchone()
 
         self.assertTrue(self.db_path.is_file())
-        self.assertEqual({"feeds", "articles", "preferences"}, tables)
+        self.assertEqual({"feeds", "articles", "preferences", "summary_versions", "ai_budgets", "ai_attempts"}, tables)
         self.assertIn("idx_articles_published", indexes)
         self.assertIn("idx_articles_category", indexes)
         self.assertEqual(len(db.STARTER_FEEDS), len(feeds))
@@ -221,7 +221,7 @@ class PostgresDatabaseTests(unittest.TestCase):
         self.assertTrue(any("CREATE SCHEMA IF NOT EXISTS news" in query for query in queries))
         self.assertTrue(any("CREATE TABLE IF NOT EXISTS news.articles" in query for query in queries))
         self.assertTrue(any("ADD COLUMN IF NOT EXISTS read_at" in query for query in queries))
-        self.assertEqual(3, sum("ENABLE ROW LEVEL SECURITY" in query for query in queries))
+        self.assertEqual(6, sum("ENABLE ROW LEVEL SECURITY" in query for query in queries))
         self.assertEqual(len(db.STARTER_FEEDS), sum("INSERT INTO feeds" in query for query in queries))
         self.assertTrue(any("ON CONFLICT(id) DO NOTHING" in query for query in queries))
 

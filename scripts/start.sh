@@ -132,12 +132,16 @@ show_startup_failure() {
     exit 1
 }
 
+AI_PROVIDER="$(cd "$REPO_ROOT/backend" && .venv/bin/python -m app.summarize.settings)"
+
 stop_if_running "$BACKEND_PID_FILE" "backend"
 stop_if_running "$FRONTEND_PID_FILE" "frontend"
 refuse_untracked_server "http://localhost:8000" "Backend" "8000"
 refuse_untracked_server "http://localhost:5173" "Frontend" "5173"
 
-if ! url_is_ready "http://localhost:11434"; then
+if [[ "$AI_PROVIDER" != "ollama" ]]; then
+    printf 'Using hosted AI (%s); Ollama is not required.\n' "$AI_PROVIDER"
+elif ! url_is_ready "http://localhost:11434"; then
     printf 'Starting Ollama...\n'
     OLLAMA_NUM_PARALLEL="${OLLAMA_NUM_PARALLEL:-3}" nohup ollama serve >"$OLLAMA_LOG" 2>&1 &
     if ! wait_for_url "http://localhost:11434" "$OLLAMA_WAIT_ATTEMPTS"; then

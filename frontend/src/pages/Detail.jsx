@@ -1,12 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
-import { Link, useNavigate, useParams } from 'react-router-dom'
-import { getArticle, markArticleRead, requestSummary } from '../api.js'
+import { Link, useParams } from 'react-router-dom'
+import { getArticle, markArticleRead } from '../api.js'
 import { formatRelativeTime } from '../time.js'
 
 
 function Detail() {
   const { id } = useParams()
-  const navigate = useNavigate()
   const [article, setArticle] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -14,27 +13,6 @@ function Detail() {
   const [savingRead, setSavingRead] = useState(false)
   const currentId = useRef(id)
   currentId.current = id
-  const [regenerating, setRegenerating] = useState(false)
-  const [regenerateError, setRegenerateError] = useState('')
-  const regenerationRequest = useRef(null)
-  const mounted = useRef(false)
-
-  async function summarizeAgain() {
-    if (regenerationRequest.current === id) return
-    regenerationRequest.current = id
-    setRegenerating(true)
-    setRegenerateError('')
-    try {
-      await requestSummary(id, true)
-      if (mounted.current && currentId.current === id) navigate('/feed')
-    } catch {
-      if (mounted.current && currentId.current === id) setRegenerateError('Could not request a new summary. Please try again.')
-    } finally {
-      if (regenerationRequest.current === id) regenerationRequest.current = null
-      if (mounted.current && currentId.current === id) setRegenerating(false)
-    }
-  }
-
   async function retryRead() {
     setSavingRead(true)
     try {
@@ -51,13 +29,10 @@ function Detail() {
 
   useEffect(() => {
     let active = true
-    mounted.current = true
     setLoading(true)
     setError('')
     setReadError('')
     setSavingRead(false)
-    setRegenerating(false)
-    setRegenerateError('')
 
     getArticle(id)
       .then((result) => {
@@ -80,7 +55,6 @@ function Detail() {
 
     return () => {
       active = false
-      mounted.current = false
     }
   }, [id])
 
@@ -134,14 +108,6 @@ function Detail() {
           <h2 id="impact-title">Why it matters</h2>
           <p>{article.summary_impact}</p>
         </aside>
-
-        <div className="resummary-actions">
-          <button type="button" className="secondary-button" disabled={regenerating} onClick={summarizeAgain}>
-            {regenerating ? 'Queuing new summary…' : 'Summarize again'}
-          </button>
-          <p>Generate a new FACTS and IMPACT summary. Follow its progress in your feed.</p>
-          {regenerateError && <p role="alert">{regenerateError}</p>}
-        </div>
 
         <a className="source-link" href={article.url} target="_blank" rel="noopener noreferrer">
           Read full article at {article.source} <span aria-hidden="true">↗</span>
