@@ -18,8 +18,15 @@ def reset_database() -> int | None:
         if not db.DATABASE_URL:
             conn.execute("BEGIN IMMEDIATE")
         deleted = conn.execute("DELETE FROM articles").rowcount
+        # Resets can run before startup migrates a legacy database.
+        preference = conn.execute("SELECT * FROM preferences WHERE id = 1").fetchone()
+        preference_columns = set(dict(preference)) if preference is not None else set()
+        extra_resets = ''.join(
+            f", {column} = '{{}}'" for column in ('focused_interests', 'summary_style')
+            if column in preference_columns
+        )
         conn.execute(
-            "UPDATE preferences SET onboarded = 0, selected_categories = '[]' WHERE id = 1"
+            "UPDATE preferences SET onboarded = 0, selected_categories = '[]'" + extra_resets + " WHERE id = 1"
         )
     return deleted
 

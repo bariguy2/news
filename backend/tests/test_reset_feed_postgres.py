@@ -19,10 +19,14 @@ class PostgresResetTests(unittest.TestCase):
         self.connection.execute("CREATE TEMP TABLE articles (id INTEGER PRIMARY KEY)")
         self.connection.execute(
             "CREATE TEMP TABLE preferences (id INTEGER PRIMARY KEY, "
-            "onboarded INTEGER, selected_categories TEXT)"
+            "onboarded INTEGER, selected_categories TEXT, focused_interests TEXT NOT NULL DEFAULT '{}', "
+            "summary_style TEXT NOT NULL DEFAULT '{}')"
         )
         self.connection.execute("INSERT INTO articles VALUES (1), (2)")
-        self.connection.execute("INSERT INTO preferences VALUES (1, 1, '[\"Tech\"]')")
+        self.connection.execute("INSERT INTO preferences (id, onboarded, selected_categories, focused_interests) VALUES (1, 1, '[\"Tech\"]', %s)",
+                                ('{"Tech":{"topics":["Gaming"],"teams":{}}}',))
+        self.connection.execute('UPDATE preferences SET summary_style = %s',
+                                ('{"tone":"analytical","length":"brief","format":"bullets"}',))
         self.connection.commit()
 
         @contextmanager
@@ -40,8 +44,8 @@ class PostgresResetTests(unittest.TestCase):
                 {"count": 0}, self.connection.execute("SELECT COUNT(*) FROM articles").fetchone()
             )
             self.assertEqual(
-                {"onboarded": 0, "selected_categories": "[]"},
-                self.connection.execute("SELECT onboarded, selected_categories FROM preferences").fetchone(),
+                {"onboarded": 0, "selected_categories": "[]", "focused_interests": "{}", "summary_style": "{}"},
+                self.connection.execute("SELECT onboarded, selected_categories, focused_interests, summary_style FROM preferences").fetchone(),
             )
 
     def test_real_postgres_failure_rolls_back_both_changes(self):
@@ -59,3 +63,5 @@ class PostgresResetTests(unittest.TestCase):
                 {"onboarded": 1, "selected_categories": '["Tech"]'},
                 self.connection.execute("SELECT onboarded, selected_categories FROM preferences").fetchone(),
             )
+            self.assertIn('Gaming', self.connection.execute('SELECT focused_interests FROM preferences').fetchone()['focused_interests'])
+            self.assertIn('analytical', self.connection.execute('SELECT summary_style FROM preferences').fetchone()['summary_style'])

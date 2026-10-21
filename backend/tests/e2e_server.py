@@ -106,7 +106,7 @@ pipeline.extract_full_text = lambda url: (url, True)
 summary_attempts = {}
 
 
-def controlled_summary(text, *, on_progress=None):
+def controlled_summary(text, *, on_progress=None, style=None):
     summary_attempts[text] = summary_attempts.get(text, 0) + 1
     # Exercise real per-article tracking while controlling the external model.
     if text.endswith('/choose-story'):
@@ -117,8 +117,14 @@ def controlled_summary(text, *, on_progress=None):
     if on_progress:
         on_progress('saving', 99)
     if summary_attempts[text] > 1:
-        return Generation('Regenerated facts are ready.', 'Regenerated impact is ready.', 'fixture', 'test', 'v2', 'hash')
-    return Generation('Requested facts are ready.', 'Requested impact is ready.', 'fixture', 'test', 'v2', 'hash')
+        facts, impact = 'Regenerated facts are ready.', 'Regenerated impact is ready.'
+    else:
+        facts, impact = 'Requested facts are ready.', 'Requested impact is ready.'
+    if style and style.format in ('bullets', 'mixed'):
+        facts = '- ' + facts
+    if style and style.format == 'bullets':
+        impact = '- ' + impact
+    return Generation(facts, impact, 'fixture', 'test', 'v3-styles', 'hash')
 
 
 pipeline.summarize_text = controlled_summary

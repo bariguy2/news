@@ -2,7 +2,7 @@
 
 import hashlib
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from threading import BoundedSemaphore
 from time import monotonic, sleep
 
@@ -11,6 +11,7 @@ from app.summarize.prompt import PROMPT_VERSION, build_summary_prompt, parse_sum
 from app.summarize.providers import Completion, ProviderError, generate
 from app.summarize.settings import settings
 from app.summarize.usage import BudgetExceeded, reserve, settle
+from app.summarize.style import SummaryStyle
 
 logger = logging.getLogger(__name__)
 _slots = BoundedSemaphore(PIPELINE_CONCURRENCY)
@@ -36,7 +37,7 @@ class CallResult:
 
 
 def call_model(prompt, config, *, scope='summary', prompt_version=PROMPT_VERSION,
-               validate=lambda result: True, on_progress=None) -> CallResult:
+               validate=lambda result: True, on_progress=None, progress_tokens=512) -> CallResult:
     result = CallResult()
     started = monotonic()
     prompt_hash = hashlib.sha256(prompt.encode()).hexdigest()
@@ -49,7 +50,7 @@ def call_model(prompt, config, *, scope='summary', prompt_version=PROMPT_VERSION
             characters += len(text)
             if on_progress:
                 # Visible output only: an estimate, never expose reasoning.
-                on_progress(stage, 10 + min(85, characters * 85 // 2048))
+                on_progress(stage, 10 + min(85, characters * 85 // (progress_tokens * 4)))
 
         with _slots:
             try:
@@ -83,14 +84,20 @@ def call_model(prompt, config, *, scope='summary', prompt_version=PROMPT_VERSION
     return result
 
 
-def summarize_text(article_text, *, on_progress=None, provider=None, scope='summary', diagnostics=None):
+def summarize_text(article_text, *, on_progress=None, provider=None, scope='summary', diagnostics=None,
+                   style: SummaryStyle | None = None):
     if not article_text.strip():
         return None
     try:
         config = settings(provider)
-        prompt = build_summary_prompt(article_text)
+        style = style or SummaryStyle()
+        # Never reduce hosted reasoning budgets or exceed the operator's token cap.
+        if config.provider == 'ollama':
+            config = replace(config, max_output=min(config.max_output, style.max_tokens))
+        prompt_version = f'{PROMPT_VERSION}:{style.version}'
+        prompt = build_summary_prompt(article_text, style=style)
         result = call_model(prompt, config, scope=scope, validate=lambda text: parse_summary(text) is not None,
-                            on_progress=on_progress)
+                            on_progress=on_progress, prompt_version=prompt_version, progress_tokens=style.max_tokens)
         if diagnostics is not None:
             diagnostics.update(error=result.error, elapsed_ms=result.elapsed_ms, attempt_ids=result.attempt_ids)
         if result.error or result.completion is None:
@@ -99,7 +106,7 @@ def summarize_text(article_text, *, on_progress=None, provider=None, scope='summ
         facts, impact = parse_summary(result.completion.text)
         if on_progress:
             on_progress('saving', 99)
-        return Generation(facts, impact, config.provider, config.model, PROMPT_VERSION,
+        return Generation(facts, impact, config.provider, config.model, prompt_version,
                           hashlib.sha256(article_text.strip()[:6000].encode()).hexdigest(), result.attempt_ids)
     except Exception as exc:
         # Errors may carry database credentials or request headers; log type only.

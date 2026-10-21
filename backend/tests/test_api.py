@@ -10,6 +10,7 @@ from app.summarize.service import Generation
 from app.summarize.manage import queue_regeneration
 from app import db
 from app.main import app
+from app.summarize.style import SummaryStyle
 
 
 class ApiTests(unittest.TestCase):
@@ -306,6 +307,9 @@ class ApiTests(unittest.TestCase):
     def test_regenerate_is_explicit_duplicate_safe_and_replaces_same_article(self) -> None:
         from app.scheduler import run_requested_summaries
         article_id = self.insert_article('regenerate', category='Tech', published_at=None)
+        with db.get_conn() as conn:
+            conn.execute('UPDATE preferences SET summary_style = ?',
+                         (SummaryStyle(tone='analytical', length='detailed', format='mixed').model_dump_json(),))
         self.client.post(f'/api/articles/{article_id}/read')
         original = self.client.get(f'/api/articles/{article_id}').json()
         with patch('app.routes.articles.run_requested_summaries') as worker:
@@ -327,6 +331,7 @@ class ApiTests(unittest.TestCase):
              patch('app.scheduler.fetch_all_feeds') as rss:
             run_requested_summaries()
         model.assert_called_once()
+        self.assertEqual(SummaryStyle(tone='analytical', length='detailed', format='mixed'), model.call_args.kwargs['style'])
         rss.assert_not_called()
         replaced = self.client.get(f'/api/articles/{article_id}').json()
         self.assertEqual('New facts', replaced['summary_facts'])
@@ -374,7 +379,8 @@ class ApiTests(unittest.TestCase):
     def test_preferences_get_post_and_persist(self) -> None:
         initial = self.client.get("/api/preferences")
         self.assertEqual(
-            {"selected_categories": [], "onboarded": False}, initial.json()
+            {"selected_categories": [], "onboarded": False, "focused_interests": {},
+             "summary_style": SummaryStyle().model_dump()}, initial.json()
         )
 
         with patch("app.routes.preferences.run_pipeline") as pipeline_mock:
@@ -385,7 +391,8 @@ class ApiTests(unittest.TestCase):
 
         self.assertEqual(200, updated.status_code)
         self.assertEqual(
-            {"selected_categories": ["Tech", "Science"], "onboarded": True},
+            {"selected_categories": ["Tech", "Science"], "onboarded": True, "focused_interests": {},
+             "summary_style": SummaryStyle().model_dump()},
             updated.json(),
         )
         pipeline_mock.assert_called_once_with()
@@ -402,6 +409,79 @@ class ApiTests(unittest.TestCase):
             "/api/preferences", json={"selected_categories": "Tech"}
         )
         self.assertEqual(422, invalid.status_code)
+
+    def test_focused_interests_round_trip_and_do_not_filter_articles(self) -> None:
+        article_id = self.insert_article('general-business', category='Business', published_at=None)
+        interests = {
+            'Business': {'topics': [' Finance & banking ', 'Energy', 'Energy'], 'teams': {}},
+            'Sports': {'topics': ['Basketball'], 'teams': {'Basketball': [' Toronto Raptors ', 'Toronto Raptors']}},
+        }
+        with patch('app.routes.preferences.run_pipeline') as worker:
+            response = self.client.post('/api/preferences', json={
+                'selected_categories': ['Business', 'Sports'], 'focused_interests': interests,
+            })
+        self.assertEqual(200, response.status_code)
+        worker.assert_called_once_with()
+        expected = {
+            'Business': {'topics': ['Finance & banking', 'Energy'], 'teams': {}},
+            'Sports': {'topics': ['Basketball'], 'teams': {'Basketball': ['Toronto Raptors']}},
+        }
+        self.assertEqual(expected, response.json()['focused_interests'])
+        db.init_db()
+        self.assertEqual(expected, self.client.get('/api/preferences').json()['focused_interests'])
+        self.assertEqual([article_id], [row['id'] for row in self.client.get('/api/articles?category=Business').json()])
+        # Clients that only know categories remain compatible and clear old detail choices.
+        with patch('app.routes.preferences.run_pipeline'):
+            cleared = self.client.post('/api/preferences', json={'selected_categories': ['Tech']})
+        self.assertEqual({}, cleared.json()['focused_interests'])
+
+    def test_invalid_focused_interests_never_save_or_start_pipeline(self) -> None:
+        invalid = [
+            {'Business': {'topics': ['Energy']}},  # category not selected
+            {'Sports': {'topics': ['Basketball'], 'teams': {'Soccer': ['Liverpool']}}},
+            {'Sports': {'topics': ['Basketball'], 'teams': {'Basketball': [' ']}}},
+            {'Sports': {'topics': ['a' * 81]}},
+            {'Sports': {'topics': [str(i) for i in range(21)]}},
+            {'Sports': {'topics': ['Basketball'], 'teams': {'Basketball': ['a' * 81]}}},
+        ]
+        with patch('app.routes.preferences.run_pipeline') as worker:
+            for interests in invalid:
+                with self.subTest(interests=interests):
+                    response = self.client.post('/api/preferences', json={
+                        'selected_categories': ['Sports'], 'focused_interests': interests,
+                    })
+                    self.assertEqual(422, response.status_code)
+            response = self.client.post('/api/preferences', json={
+                'selected_categories': ['Business'],
+                'focused_interests': {'Business': {'topics': ['Energy'], 'teams': {'Energy': ['Team']}}},
+            })
+            self.assertEqual(422, response.status_code)
+            worker.assert_not_called()
+        self.assertFalse(self.client.get('/api/preferences').json()['onboarded'])
+
+    def test_summary_style_round_trip_and_rejects_invalid_values_without_saving(self) -> None:
+        style = {'tone': 'conversational', 'length': 'brief', 'format': 'mixed'}
+        with patch('app.routes.preferences.run_pipeline') as worker:
+            response = self.client.post('/api/preferences', json={
+                'selected_categories': ['Tech'], 'summary_style': style,
+            })
+            self.assertEqual(200, response.status_code)
+            self.assertEqual(style, response.json()['summary_style'])
+            worker.assert_called_once_with()
+        db.init_db()
+        self.assertEqual(style, self.client.get('/api/preferences').json()['summary_style'])
+        with patch('app.routes.preferences.run_pipeline') as worker:
+            for invalid in ({'tone': 'invented'}, {'length': 'huge'}, {'format': 'html'},
+                            {'tone': 'neutral', 'system_prompt': 'override'}, None):
+                with self.subTest(invalid=invalid):
+                    self.assertEqual(422, self.client.post('/api/preferences', json={
+                        'selected_categories': ['World'], 'summary_style': invalid,
+                    }).status_code)
+            worker.assert_not_called()
+        self.assertEqual(style, self.client.get('/api/preferences').json()['summary_style'])
+        with patch('app.routes.preferences.run_pipeline'):
+            default = self.client.post('/api/preferences', json={'selected_categories': ['Tech']})
+        self.assertEqual(SummaryStyle().model_dump(), default.json()['summary_style'])
 
     def test_cors_allows_only_vite_development_origin(self) -> None:
         allowed = self.client.options(

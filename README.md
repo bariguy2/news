@@ -150,6 +150,61 @@ npm run dev
 Open [http://localhost:5173](http://localhost:5173). The frontend reads
 `VITE_API_BASE=http://localhost:8000` from `frontend/.env`.
 
+Onboarding has three steps. Choose broad categories, then optionally choose more
+focused topics: business industries, sports and teams, technology subjects,
+world regions, or science topics. Finally, choose how AI summaries should read.
+Team choices include a short starting list and an **Add team** field.
+**Back to categories** and **Back to topics** preserve current choices;
+removing a category clears its details, and removing a sport clears its teams.
+Only **Build my briefing** on the final screen saves and completes onboarding. A failed save keeps
+the choices available for retry.
+
+Detailed interests are saved for upcoming backend support. They do **not**
+currently filter, rank, fetch, or summarize articles; the feed still uses broad
+categories. The second screen makes this limitation visible. Existing users
+are not forced through onboarding again. Reloading an unfinished onboarding
+starts a fresh selection; there is no saved draft.
+
+`GET` and `POST /api/preferences` now include optional `focused_interests`, a
+map from selected category to `{ "topics": [...], "teams": { "Basketball":
+["Toronto Raptors"] } }`. Team keys must match selected Sports topics. A
+category can have up to 20 topics, each sport up to 20 teams, and names up to
+80 characters. Requests omitting this field remain valid and save an empty
+map. Preferences use one JSON-text column with an empty-object default;
+startup migrates existing SQLite and PostgreSQL tables without resetting
+articles or onboarding. Resetting the feed also clears these details.
+
+The final screen offers **Neutral**, **Conversational**, or **Analytical** tone;
+**Brief**, **Standard**, or **Detailed** length; and **Bullet points**,
+**Paragraphs**, or **Mixed** format. Mixed uses bullets for Facts and a paragraph
+for Impact. A local illustrative preview types out Facts followed by Impact
+with a blinking caret when choices change, without calling the model. The
+completed layout is reserved to avoid shifting controls while text appears.
+Screen readers receive the complete text; reduced-motion preferences show it
+immediately. Unlike the focused topics, summary style is already used by the
+configured AI provider for newly generated summaries and operator replacements.
+Published summaries are shared and reused; a new preference does not rewrite
+them. There is no reader regeneration button. Facts remain grounded and neutral
+in all tones.
+The model's wording, exact length, and adherence to the requested style may vary.
+
+Preferences GET/POST adds `summary_style` with `tone`, `length`, and `format`.
+Defaults are `neutral`, `standard`, and `paragraphs`; omitted or empty objects
+use defaults, and invalid/unknown options return 422 before saving or queuing
+work. SQLite/PostgreSQL store a separate JSON-text field with an empty-object
+default and an idempotent startup migration. Feed reset restores default style,
+including on legacy databases before migration. Each pipeline cycle snapshots
+the saved style for its workers. Malformed stored styles fall back to defaults.
+Hosted generation retains the configured provider output cap, including room
+for reasoning; choosing a style never increases that cap or bypasses usage
+reservations. In optional Ollama mode, the visible 256/512/768-token style
+budget is capped by `OLLAMA_MAX_OUTPUT_TOKENS`. Streaming progress uses the
+chosen style's visible-text estimate. Version provenance records the prompt
+version and tone/length/format; comparisons made with the prior prompt version
+require a new result directory. Facts and Impact markers remain
+unchanged, and article details safely render plain paragraphs and simple lists
+without interpreting model-provided HTML.
+
 The scheduler runs immediately when the backend starts and then every 30
 minutes. Before onboarding it has no selected categories and does no feed work.
 Saving preferences triggers an immediate refresh that ingests only the selected

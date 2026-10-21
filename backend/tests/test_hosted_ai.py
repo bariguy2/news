@@ -13,6 +13,7 @@ from app import db
 from app.summarize import benchmark, providers, service, usage
 from app.summarize.prompt import build_summary_prompt, parse_summary
 from app.summarize.settings import Settings, settings
+from app.summarize.style import SummaryStyle
 
 GOOD = '===FACTS===\nThe council approved 12 buses.\n===IMPACT===\nThe purchase could improve service.'
 CONFIG = Settings('groq', 'openai/gpt-oss-120b', 'secret-test-key', 150, 600, 2048, 2, 2)
@@ -114,6 +115,56 @@ class BudgetTests(IsolatedDatabase):
              patch.object(service, 'settings', return_value=CONFIG), self.assertLogs(service.logger, level='ERROR') as logs:
             self.assertIsNone(service.summarize_text('Article'))
         self.assertNotIn('secret-test-key', '\n'.join(logs.output))
+
+
+class StyleIntegrationTests(IsolatedDatabase):
+    def test_styles_retain_provider_caps_accounting_and_provenance(self):
+        for provider in ('groq', 'gemini', 'ollama'):
+            for length in ('brief', 'standard', 'detailed'):
+                with self.subTest(provider=provider, length=length):
+                    config = replace(CONFIG, provider=provider, max_output=512 if provider == 'ollama' else 2048)
+                    chosen = SummaryStyle(tone='analytical', length=length, format='mixed')
+                    captured = []
+                    def generate(selected, prompt, on_text):
+                        captured.append((selected, prompt))
+                        on_text('x' * 512)
+                        return providers.Completion(GOOD, 30, 80, 0, 'stop')
+                    updates = []
+                    with patch.object(service, 'settings', return_value=config), \
+                         patch.object(service, 'generate', side_effect=generate):
+                        result = service.summarize_text('Same source.', style=chosen, on_progress=lambda *item: updates.append(item))
+                    self.assertIsNotNone(result)
+                    selected, prompt = captured[0]
+                    expected_cap = min(config.max_output, chosen.max_tokens) if provider == 'ollama' else config.max_output
+                    self.assertEqual(expected_cap, selected.max_output)
+                    self.assertIn('analytical language', prompt)
+                    self.assertIn('Use a paragraph in IMPACT', prompt)
+                    self.assertIn(chosen.version, result.prompt_version)
+                    self.assertIn(('summarizing', 10 + min(85, 512 * 85 // (chosen.max_tokens * 4))), updates)
+                    with db.get_conn() as conn:
+                        attempt = conn.execute('SELECT * FROM ai_attempts WHERE id = ?', (result.attempt_ids[0],)).fetchone()
+                    self.assertEqual(result.prompt_version, attempt['prompt_version'])
+                    self.assertEqual((len(prompt.encode()) + 256) * config.input_rate + expected_cap * config.output_rate,
+                                     attempt['reserved_nano'])
+
+    def test_style_is_kept_on_retry_and_distinguishes_summary_versions(self):
+        chosen = SummaryStyle(tone='conversational', length='brief', format='bullets')
+        with patch.object(service, 'settings', return_value=CONFIG), \
+             patch.object(service, 'generate', side_effect=[providers.Completion('bad', 20, 4, 0, 'stop'),
+                                                           providers.Completion(GOOD, 20, 80, 0, 'stop')]) as generate, \
+             patch.object(service, 'sleep'):
+            styled = service.summarize_text('Same source.', style=chosen)
+        self.assertIsNotNone(styled)
+        self.assertEqual(2, len(styled.attempt_ids))
+        for call in generate.call_args_list:
+            self.assertIn('bullet points only', call.args[1])
+            self.assertIn('approachable', call.args[1])
+            self.assertEqual(CONFIG.max_output, call.args[0].max_output)
+        with patch.object(service, 'settings', return_value=CONFIG), \
+             patch.object(service, 'generate', return_value=providers.Completion(GOOD, 20, 80, 0, 'stop')):
+            default = service.summarize_text('Same source.')
+        self.assertEqual(default.input_hash, styled.input_hash)
+        self.assertNotEqual(default.prompt_version, styled.prompt_version)
 
 
 class ProviderTests(unittest.TestCase):

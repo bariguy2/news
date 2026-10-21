@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { getArticle, markArticleRead } from '../api.js'
 import { formatRelativeTime } from '../time.js'
+import SummaryContent from '../components/SummaryContent.jsx'
 
 
 function Detail() {
@@ -100,13 +101,13 @@ function Detail() {
         <section className="facts-section" aria-labelledby="facts-title">
           <p className="section-label">Facts</p>
           <h2 id="facts-title">What happened</h2>
-          <p>{article.summary_facts}</p>
+          <SummaryContent text={article.summary_facts} />
         </section>
 
         <aside className="impact-panel" aria-labelledby="impact-title">
           <p className="section-label">Analysis</p>
           <h2 id="impact-title">Why it matters</h2>
-          <p>{article.summary_impact}</p>
+          <SummaryContent text={article.summary_impact} />
         </aside>
 
         <a className="source-link" href={article.url} target="_blank" rel="noopener noreferrer">
