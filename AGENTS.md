@@ -93,6 +93,22 @@ Important invariants:
 
 ## Current status
 
+### Profile button placeholder (2026-10-22)
+
+The user narrowed the initial settings-page request to a placeholder button
+only. Feed now has an accessible 44 px circular profile icon button at the
+upper right, with a coming-soon tooltip, hover styling and visible keyboard
+focus. Clicking it has no action. Header spacing keeps it clear of text on
+desktop and mobile. No settings route, authentication, preference changes,
+backend code, dependencies or new automated tests were added.
+
+Verification: all 11 existing feed tests and production build pass. A temporary
+Chrome session checked desktop, 320 px and 390 px layouts, no overflow, click
+without navigation, and actual Tab/Shift+Tab focus. Desktop/mobile screenshots
+were visually inspected; the temporary browser closed in finally. Development
+services and real preferences/articles were preserved. Changes are uncommitted
+on `chunny22/frontend`.
+
 ### Frontend branch rebased onto hosted-AI main (2026-10-21)
 
 The user requested rebasing `chunny22/frontend` onto main's `fff9ce7` merge of

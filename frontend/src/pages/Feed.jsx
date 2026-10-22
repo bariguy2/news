@@ -169,6 +169,13 @@ function Feed() {
   return (
     <main className="feed-page">
       <header className="feed-header">
+        <button type="button" className="profile-button" aria-label="Profile" title="Profile settings coming soon">
+          <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor"
+            strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
+            <circle cx="12" cy="8" r="3.5" />
+            <path d="M5 20a7 7 0 0 1 14 0" />
+          </svg>
+        </button>
         <div>
           <p className="eyebrow">Local news</p>
           <h1>Your briefing</h1>

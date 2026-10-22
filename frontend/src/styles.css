@@ -278,14 +278,35 @@ h1 {
 }
 
 .feed-header {
+  position: relative;
   display: flex;
   align-items: end;
   justify-content: space-between;
   gap: 2rem;
   margin-bottom: 3rem;
   padding-bottom: 2rem;
+  padding-right: 4rem;
   border-bottom: 1px solid var(--line);
 }
+
+.profile-button {
+  position: absolute;
+  top: 0;
+  right: 0;
+  display: grid;
+  place-items: center;
+  width: 2.75rem;
+  height: 2.75rem;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  color: var(--forest);
+  background: var(--paper);
+  cursor: pointer;
+}
+
+.profile-button:hover { border-color: var(--forest); background: #edf2ed; }
+.profile-button:focus-visible { outline: 3px solid rgb(184 71 43 / 35%); outline-offset: 3px; }
 
 .feed-header h1 {
   margin-bottom: 0.75rem;
