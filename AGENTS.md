@@ -93,6 +93,49 @@ Important invariants:
 
 ## Current status
 
+### First-open summary typing (2026-10-22)
+
+The user reverted the uncommitted open-unsummarized-article change, then
+requested the onboarding typing effect on the first summary visit only.
+Done: Detail now snapshots whether the loaded article has read_at before
+recording the open. At the user's follow-up request, unread summaries type
+Facts and Analysis simultaneously through the shared TypingPreview component,
+each at the existing 6 ms/character bounded 0.6–1.75-second pace. Saving read
+status does not interrupt or replay typing.
+Completion switches back to ordinary SummaryContent; already-read summaries
+appear immediately on navigation or reload. A failed read write retains the
+existing retry action; without a saved timestamp, another visit can animate.
+The saved single-user read state remains shared across clients.
+
+TypingPreview now accepts a section renderer and completion callback so detail
+retains its Facts/Analysis headings, safe list formatting, impact styling and
+source button. Onboarding retains its existing rendering and replay behavior.
+Layout reservation, complete accessible text, reduced-motion instant display,
+and timer/listener cleanup are reused. No backend, schema, AI call, new package
+or CI workflow change is involved. Feed source links and done-only details stay
+as before. The user approved committing and pushing this change on
+chunny22/frontend with the message "Added typing animation for article summary".
+
+Verification: npm.cmd test passes all 38 frontend tests, including first-open
+partial typing, continuation after read persistence, completion,
+return without typing, and reduced motion. npm.cmd run build passes (35
+modules). Chrome E2E passes using isolated ports 18000/15173, with controlled
+browser time proving partial reveal, stable section height and no replay after
+reload, alongside the existing full flow. Desktop and 390 px typing screenshots
+were visually inspected; no mobile overflow was found. Backend tests were not
+rerun for this frontend-only change. E2E uses isolated SQLite and deterministic
+AI/extraction fixtures; real articles and preferences were preserved. Test
+commands exited normally; no isolated API, Vite or Playwright processes remain,
+ports 18000/15173 are closed, and pre-existing dev listeners 8000/5173 remain.
+
+Follow-up verification for simultaneous Analysis typing: the 10 focused
+Detail/TypingPreview/App tests pass, as does isolated Chrome E2E. Browser
+assertions now verify partial Analysis text and its active caret alongside
+Facts before completion. The refreshed mobile screenshot was visually checked.
+The earlier full-suite/build results above precede this timing adjustment;
+those full checks were not repeated. Test processes exited and isolated ports
+are closed; development services are preserved.
+
 ### Profile button placeholder (2026-10-22)
 
 The user narrowed the initial settings-page request to a placeholder button

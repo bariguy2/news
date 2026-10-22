@@ -262,6 +262,15 @@ existing SQLite and PostgreSQL tables without clearing articles or preferences.
 This is still a single-user app: the read state is shared by clients using the
 same database and is removed when its article is purged or the feed is reset.
 
+Opening an unread summary plays the onboarding-style typing effect in both
+Facts and Analysis at the same time. Each section has its own duration.
+The saved read timestamp prevents replay
+on later visits or reloads. The first animation continues while read status
+is saved; once finished, the full text stays visible. Reduced motion shows
+everything immediately. The layout is reserved while typing, and screen
+readers receive complete text. This is a display effect on the saved summary;
+it does not request AI again.
+
 Each requested article has its own progress bar. Queued articles start at 0%,
 reading the article starts at 2%, and streamed model output advances an
 **Estimated** percentage from 10% up to 95%. A valid two-section response moves

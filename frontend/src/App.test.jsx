@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import App from './App.jsx'
@@ -94,7 +94,7 @@ describe('news application flow', () => {
 
     fireEvent.click(storyLink)
     expect(await screen.findByRole('heading', { name: 'A useful technology headline' })).toBeVisible()
-    expect(screen.getByText('Verified facts from the article.')).toBeVisible()
+    await waitFor(() => expect(screen.getByText('Verified facts from the article.')).toBeVisible())
     expect(screen.getByRole('heading', { name: 'Why it matters' })).toBeVisible()
     expect(screen.getByText('A grounded explanation of why the event matters.')).toBeVisible()
 

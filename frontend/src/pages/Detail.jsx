@@ -1,8 +1,24 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { getArticle, markArticleRead } from '../api.js'
 import { formatRelativeTime } from '../time.js'
 import SummaryContent from '../components/SummaryContent.jsx'
+import TypingPreview from '../components/TypingPreview.jsx'
+
+function SummarySections({ facts, impact }) {
+  return <>
+    <section className="facts-section" aria-labelledby="facts-title">
+      <p className="section-label">Facts</p>
+      <h2 id="facts-title">What happened</h2>
+      {facts}
+    </section>
+    <aside className="impact-panel" aria-labelledby="impact-title">
+      <p className="section-label">Analysis</p>
+      <h2 id="impact-title">Why it matters</h2>
+      {impact}
+    </aside>
+  </>
+}
 
 
 function Detail() {
@@ -12,6 +28,8 @@ function Detail() {
   const [error, setError] = useState('')
   const [readError, setReadError] = useState('')
   const [savingRead, setSavingRead] = useState(false)
+  const [animateSummary, setAnimateSummary] = useState(false)
+  const finishAnimation = useCallback(() => setAnimateSummary(false), [])
   const currentId = useRef(id)
   currentId.current = id
   async function retryRead() {
@@ -34,11 +52,14 @@ function Detail() {
     setError('')
     setReadError('')
     setSavingRead(false)
+    setAnimateSummary(false)
 
     getArticle(id)
       .then((result) => {
         if (!active) return
         setArticle(result)
+        // Keep the first-open decision separate from the read write below.
+        setAnimateSummary(!result.read_at)
         if (!result.read_at) {
           markArticleRead(id).then((status) => {
             if (active) setArticle((previous) => ({ ...previous, read_at: status.read_at }))
@@ -98,17 +119,11 @@ function Detail() {
           </div>}
         </header>
 
-        <section className="facts-section" aria-labelledby="facts-title">
-          <p className="section-label">Facts</p>
-          <h2 id="facts-title">What happened</h2>
-          <SummaryContent text={article.summary_facts} />
-        </section>
-
-        <aside className="impact-panel" aria-labelledby="impact-title">
-          <p className="section-label">Analysis</p>
-          <h2 id="impact-title">Why it matters</h2>
-          <SummaryContent text={article.summary_impact} />
-        </aside>
+        {animateSummary ? <TypingPreview key={id} factsText={article.summary_facts}
+          impactText={article.summary_impact} simultaneous onComplete={finishAnimation}>
+          {(facts, impact) => <SummarySections facts={facts} impact={impact} />}
+        </TypingPreview> : <SummarySections facts={<SummaryContent text={article.summary_facts} />}
+          impact={<SummaryContent text={article.summary_impact} />} />}
 
         <a className="source-link" href={article.url} target="_blank" rel="noopener noreferrer">
           Read full article at {article.source} <span aria-hidden="true">↗</span>
