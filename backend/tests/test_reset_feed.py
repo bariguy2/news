@@ -27,6 +27,8 @@ class ResetFeedTests(unittest.TestCase):
             conn.execute(
                 "UPDATE preferences SET onboarded = 1, selected_categories = '[\"Tech\"]'"
             )
+            conn.execute("UPDATE preferences SET focused_interests = ?", ('{"Tech":{"topics":["Gaming"],"teams":{}}}',))
+            conn.execute("UPDATE preferences SET summary_style = ?", ('{"tone":"analytical","length":"brief","format":"bullets"}',))
 
     def test_reset_is_atomic_idempotent_and_preserves_feeds(self):
         self.seed()
@@ -34,7 +36,7 @@ class ResetFeedTests(unittest.TestCase):
         with db.get_conn() as conn:
             self.assertEqual(0, conn.execute("SELECT COUNT(*) FROM articles").fetchone()[0])
             self.assertEqual(
-                (0, "[]"), tuple(conn.execute("SELECT onboarded, selected_categories FROM preferences").fetchone())
+                (0, "[]", "{}", "{}"), tuple(conn.execute("SELECT onboarded, selected_categories, focused_interests, summary_style FROM preferences").fetchone())
             )
             self.assertEqual(8, conn.execute("SELECT COUNT(*) FROM feeds").fetchone()[0])
         self.assertEqual(0, reset_feed.reset_database())
@@ -55,6 +57,15 @@ class ResetFeedTests(unittest.TestCase):
     def test_missing_sqlite_does_not_create_database(self):
         self.assertIsNone(reset_feed.reset_database())
         self.assertFalse(self.path.exists())
+
+    def test_reset_handles_legacy_preferences_before_startup_migration(self):
+        self.seed()
+        with db.get_conn() as conn:
+            conn.execute('ALTER TABLE preferences DROP COLUMN focused_interests')
+            conn.execute('ALTER TABLE preferences DROP COLUMN summary_style')
+        self.assertEqual(1, reset_feed.reset_database())
+        with db.get_conn() as conn:
+            self.assertEqual((0, '[]'), tuple(conn.execute('SELECT onboarded, selected_categories FROM preferences').fetchone()))
 
     def test_postgres_connection_failure_never_touches_sqlite(self):
         self.seed()

@@ -93,6 +93,52 @@ Important invariants:
 
 ## Current status
 
+### Frontend branch rebased onto hosted-AI main (2026-10-21)
+
+The user requested rebasing `chunny22/frontend` onto main's `fff9ce7` merge of
+`16eb463` from `dev/bariguy/new_ai`. Local recovery branch
+`codex/chunny22-frontend-before-rebase-2026-10-21` retains original tip `248e410`.
+Unlike the earlier script-only merge, this upstream replaces the Ollama SDK
+with hosted Groq/Gemini/optional-Ollama HTTPX providers, shared request-only
+summaries, immutable versions, accounting/limits and offline comparisons.
+
+Conflict resolution preserves upstream's zero default automatic summaries,
+strict parsing/source grounding, durable reservation/settlement, history,
+operator-only regeneration and removal of the reader regeneration button.
+The obsolete Ollama client and tests stay deleted. Our three-step onboarding,
+focused-interest storage, style choices, safe list rendering and faster typed
+preview remain. SQLite initialization now performs both preference and article-
+version migrations before preserving legacy summaries. Both status histories
+are retained below; older local-only/regeneration descriptions are historical.
+
+Style handling is adapted to `summarize/service.py`: workers pass their validated
+style snapshot, prompts retain upstream safety instructions, and a v3 prompt
+version plus tone/length/format is stored in attempt/version provenance. Hosted
+token caps include reasoning and stay as configured; style never raises them
+or bypasses reservations. Optional Ollama uses the smaller of its configured
+cap and visible style budget. Streaming estimates use the visible style budget.
+Prior comparison artifacts remain intact but the changed prompt version
+requires a new output directory. UI/README now explain shared published
+summaries and operator replacements instead of offering reader regeneration.
+
+Verification: locked dependency sync removes the obsolete Ollama SDK; backend
+suite runs 96 tests (92 pass, four opt-in PostgreSQL checks skip without a URL),
+and compileall passes. All four PostgreSQL checks pass separately against only
+connection-local temporary tables (reset/rollback, usage accounting, versions,
+operator queue and history retention). All 36 frontend tests and the production
+build pass (35 modules). Isolated Chrome E2E passes three-step onboarding,
+typing/reduced motion, saved style and interest persistence, formatted details,
+search/read/progress/immediate completion, reuse and blocked public regeneration.
+New integration coverage checks Groq/Gemini/Ollama style propagation, unchanged
+hosted caps, conservative reservations, retry style and version attribution.
+No live hosted AI call or production data reset was used for verification.
+
+The tracked dev backend was paused before rebase to prevent partial reloads;
+frontend and Ollama were preserved. The user has now configured AI keys locally
+for restart. Credentials were not displayed, changed, or committed. The rebased
+commit is pushed with an explicit force-with-lease against the original remote
+tip; remote concurrent work must never be overwritten.
+
 ### Hosted AI and automated comparison, steps 1–3 (2026-10-21)
 
 The user approved replacing the local-only default with configurable hosted AI,
@@ -180,6 +226,157 @@ Next: restart the app when ready, collect a representative frozen comparison
 set, review its flags/sample, then implement version-linked like/dislike feedback.
 The app still requires one backend process; distributed job claims and per-user
 quotas are not implemented. Older entries below describe historical behavior.
+
+### Onboarding changes approved for commit (2026-10-21)
+
+After reviewing the three-step onboarding, saved focused interests, applied
+summary styles and faster animated preview, the user requested committing and
+pushing all these changes on `chunny22/frontend`. The verification records
+below describe the included work; their uncommitted-status notes are historical.
+Environment files, development logs/PID records and generated test artifacts
+remain ignored. Development services are preserved for the user.
+
+### Faster preview typing (2026-10-21)
+
+At the user's request, preview typing is now twice as fast: six milliseconds
+per character with a 0.6–1.75-second total duration, replacing 12 milliseconds
+and 1.2–3.5 seconds. The existing 24 ms updates, sequential Facts/Impact reveal,
+layout reservation, cancellation and reduced-motion behavior remain intact.
+The three existing animation tests were checked with updated intermediate-time
+assertions and pass; the production build passes (35 modules). No new tests,
+dependencies or backend changes were needed. Changes remain uncommitted.
+
+### Animated summary-style preview (2026-10-20)
+
+The user requested a preview that appears to be typed. The third onboarding
+screen now uses `TypingPreview.jsx` to reveal Facts followed by Impact with a
+blinking caret. It replays on tone/length/format changes. Character counts use
+elapsed time with a bounded 1.2–3.5-second duration and 24 ms updates. The full
+layout is reserved with a transparent accessible copy, so controls stay still;
+the visual partial text is hidden from assistive technology to avoid announcing
+every character. Reduced motion shows full text immediately, including when the
+OS preference changes while typing. Choice changes/unmount cancel old timers
+and remove media-query listeners. This is a local React/CSS animation with no
+model calls, dependencies, backend or database changes.
+
+Verification: all 38 frontend tests and the production build pass (35 modules).
+New fake-clock checks cover intermediate/sequential text, completion, cancellation,
+unmount cleanup and reduced-motion changes. Chrome E2E on isolated ports
+18000/15173 passes the full flow and verifies real intermediate text growth,
+stable preview height, instant reduced-motion completion, and choice changes
+under reduced motion. The typing screenshot was visually inspected; existing
+desktop/mobile preview screenshots were refreshed. Backend tests were not rerun
+for this frontend-only addition. Dev services remain available for review; all
+onboarding changes are still uncommitted on `chunny22/frontend`.
+
+### Third onboarding step for summary style (2026-10-20)
+
+The user requested summary tone, length and presentation choices after the
+focused interests screen. This supersedes the two-step flow described below.
+Onboarding now has three screens: categories, focused interests, summary style.
+The final screen offers Neutral/Conversational/Analytical, Brief/Standard/
+Detailed, and Bullet points/Paragraphs/Mixed. Mixed means Facts as a list and
+Impact as a paragraph. Native grouped radio controls, a local illustrative
+preview and Back to topics fit the existing design. Back navigation preserves
+all earlier choices and style; only the final Build my briefing saves. Defaults
+are neutral/standard/paragraphs. Failure retains choices and allows retry.
+
+Unlike focused interests (still saved only for the future backend), style is
+already applied to new and explicitly regenerated summaries. Preferences
+GET/POST adds validated `summary_style` with `tone`, `length`, `format`. Invalid
+or unknown options fail before persistence or pipeline work; omitted/empty
+objects use defaults. A separate JSON-text column defaults to `{}` in both
+schemas; startup migration preserves existing data and onboarding. Feed reset
+clears style and remains compatible with pre-migration tables.
+
+Each coordinator cycle reads a validated immutable style snapshot and passes it
+to workers, including summary-only retries/regeneration. Malformed stored
+styles fall back to defaults. Prompts retain literal FACTS/IMPACT markers and
+factual grounding for all tones. Length changes the prompt target and token cap
+to 256/512/768; the streaming estimate uses that same budget. Exact model length
+and styling are best-effort, as the preview explains. Existing summaries are
+not automatically replaced. Detail safely renders simple lists and paragraphs
+as React text, without interpreting HTML or introducing Markdown dependencies.
+
+Verification on Windows:
+- Backend: 81 tests, 79 pass and two opt-in PostgreSQL checks skip without a
+  URL; compileall passes. Tests cover all 27 prompt combinations, style-aware
+  retry/token limits/progress, saved pipeline style and invalid-storage fallback,
+  regenerated articles using current style, API validation/persistence/defaults,
+  legacy migration preservation, and atomic reset/rollback behavior.
+- Frontend: all 35 tests and production build pass (34 modules). Tests cover
+  the third-step defaults, choices and Back preservation, full saved payload,
+  disabled controls, failure/retry, preview changes and safe list/paragraph/HTML
+  text rendering. Prior search/read/progress/detail checks also pass.
+- Chrome E2E passes on isolated ports 18000/15173: full three-step onboarding,
+  style and interest persistence after reload, no premature save, Back choices,
+  mixed-format generated details and existing regeneration/progress flow.
+  Desktop and 390-pixel mobile style screenshots were visually inspected.
+- Supabase column verified; preference route SQL tested only against a
+  connection-local temporary table. Both updated real PostgreSQL reset tests
+  pass separately against pg_temp tables. No real articles/preferences reset.
+- Three synthetic, database-free calls through the actual installed Ollama
+  model verify bullet-only, paragraph-only and mixed outputs with streaming.
+  Outputs were 110/125/110 words for Brief, illustrating the approximate length
+  target; each retained both parsed sections and reached the Saving stage.
+
+Development services remain running for review. All onboarding changes remain
+uncommitted on `chunny22/frontend`; no dependency or CI workflow change was
+needed. Test-owned processes and listeners are checked after verification.
+
+### Two-step onboarding and saved focused interests (2026-10-20)
+
+On `chunny22/frontend` (renamed from dev-hjc after PR #4 merged), the user
+requested a second onboarding screen for detailed interests and a Back button.
+They explicitly chose to save these interests for their collaborator's upcoming
+backend rather than add approximate keyword filtering now. This extends the
+plan's single-step category picker; ingestion, ranking and summarization still
+use only the existing broad categories. The UI clearly states this limitation.
+
+Step one now uses Continue without saving or triggering ingestion. Step two
+shows only selected categories: industries for Business, disciplines and teams
+for Sports, plus Tech/World/Science topics. Sports have short suggested team
+lists and a custom-team input. Choices are optional. Back to categories retains
+choices; removing a category or sport clears its dependent interests/teams.
+Build my briefing saves once, disables controls while saving, and preserves
+choices on failure for retry. Headings receive focus on step changes; layouts
+wrap at mobile widths. There are no new packages. The topic/team catalog lives
+in `frontend/src/interests.js`; it is a starter list, not provider coverage.
+Unfinished drafts live in component state and reset on reload. Already-onboarded
+users are not forced through onboarding again.
+
+The existing preferences GET/POST contract adds `focused_interests`, a map from
+selected category to `{topics: [...], teams: {sport: [team names]}}`. Only Sports
+can have teams, each sport key must be selected as a topic, category keys must
+be selected, names are trimmed and bounded to 80 characters, and lists are
+deduplicated and bounded to 20 topics/teams. Omitted details default to `{}`
+for old clients. SQLite and private-schema PostgreSQL each store one JSON-text
+column with an empty-object default. Startup adds the column idempotently,
+preserving existing articles and preferences. Feed reset clears the new field
+transactionally and still works on legacy tables before startup migration.
+README documents the API and the current lack of focused article filtering.
+
+Verification:
+- Backend suite: 76 tests, 74 pass and two opt-in PostgreSQL tests skip without
+  a test connection. Compileall passes. New checks cover preference round-trip,
+  validation/no-save on failure, unchanged broad article filtering, legacy
+  migration preservation, focused reset and pre-migration reset compatibility.
+- Frontend: all 32 tests and production build pass. New checks cover conditional
+  topics/teams, Back navigation, removed-category/sport cleanup, custom teams,
+  optional broad choices, save failure/retry, disabled controls and team limits.
+- Chrome E2E passes on isolated ports 18000/15173, including two-step choices,
+  custom teams, Back preservation, no premature save, persistence after reload,
+  mobile overflow checks, and the existing search/read/progress/regeneration
+  flow. Desktop and 390-pixel mobile screenshots were visually inspected.
+- Configured PostgreSQL column verified; real preference GET/POST SQL exercised
+  against connection-local temporary preferences only. Both updated PostgreSQL
+  reset/rollback tests pass separately against pg_temp tables. No test queued
+  live background work, changed application preferences, or reset real articles.
+
+Development services remain running for user review. Changes are uncommitted;
+no pipeline/workflow modification is needed for these automatically discovered
+tests. Test process/port cleanup is checked separately from the preserved dev
+services.
 
 ### dev-hjc rebased onto main 21c4ca1 (2026-10-19)
 

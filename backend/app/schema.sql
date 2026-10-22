@@ -29,7 +29,9 @@ CREATE INDEX IF NOT EXISTS idx_articles_category ON articles(category);
 CREATE TABLE IF NOT EXISTS preferences (
     id INTEGER PRIMARY KEY CHECK (id = 1),   -- single-row table
     selected_categories TEXT NOT NULL,        -- JSON array string
-    onboarded INTEGER NOT NULL DEFAULT 0
+    onboarded INTEGER NOT NULL DEFAULT 0,
+    focused_interests TEXT NOT NULL DEFAULT '{}',
+    summary_style TEXT NOT NULL DEFAULT '{}'
 );
 
 -- Retained across feed purges/resets for attribution and future feedback.

@@ -78,6 +78,9 @@ describe('news application flow', () => {
 
     expect(await screen.findByRole('heading', { name: 'What should make your front page?' })).toBeVisible()
     fireEvent.click(await screen.findByRole('checkbox', { name: 'Tech' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
+    expect(screen.getByRole('heading', { name: 'Make it more your own.' })).toBeVisible()
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
     fireEvent.click(screen.getByRole('button', { name: 'Build my briefing' }))
 
     expect(await screen.findByRole('heading', { name: 'Your briefing' })).toBeVisible()
@@ -85,7 +88,8 @@ describe('news application flow', () => {
     expect(storyLink).toHaveAttribute('href', '/article/7')
 
     const postCall = fetch.mock.calls.find(([, options = {}]) => options.method === 'POST')
-    expect(JSON.parse(postCall[1].body)).toEqual({ selected_categories: ['Tech'] })
+    expect(JSON.parse(postCall[1].body)).toEqual({ selected_categories: ['Tech'], focused_interests: {},
+      summary_style: { tone: 'neutral', length: 'standard', format: 'paragraphs' } })
     expect(fetch.mock.calls.some(([url]) => new URL(url).searchParams.get('category') === 'Tech')).toBe(true)
 
     fireEvent.click(storyLink)

@@ -34,8 +34,13 @@ CREATE INDEX IF NOT EXISTS idx_articles_category ON news.articles(category);
 CREATE TABLE IF NOT EXISTS news.preferences (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     selected_categories TEXT NOT NULL,
-    onboarded INTEGER NOT NULL DEFAULT 0
+    onboarded INTEGER NOT NULL DEFAULT 0,
+    focused_interests TEXT NOT NULL DEFAULT '{}',
+    summary_style TEXT NOT NULL DEFAULT '{}'
 );
+
+ALTER TABLE news.preferences ADD COLUMN IF NOT EXISTS focused_interests TEXT NOT NULL DEFAULT '{}';
+ALTER TABLE news.preferences ADD COLUMN IF NOT EXISTS summary_style TEXT NOT NULL DEFAULT '{}';
 
 ALTER TABLE news.feeds ENABLE ROW LEVEL SECURITY;
 ALTER TABLE news.articles ENABLE ROW LEVEL SECURITY;

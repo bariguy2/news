@@ -110,6 +110,26 @@ class DatabaseTests(unittest.TestCase):
         with db.get_conn() as conn:
             self.assertEqual(('Legacy', '2026-10-09T12:00:00+00:00'), tuple(conn.execute("SELECT title, read_at FROM articles").fetchone()))
 
+    def test_legacy_preferences_migrate_without_resetting_onboarding(self) -> None:
+        self.db_path.parent.mkdir(parents=True)
+        with sqlite3.connect(self.db_path, factory=db.ClosingConnection) as conn:
+            conn.executescript("""
+                CREATE TABLE preferences (id INTEGER PRIMARY KEY,
+                    selected_categories TEXT NOT NULL, onboarded INTEGER NOT NULL DEFAULT 0);
+                INSERT INTO preferences VALUES (1, '["Business"]', 1);
+            """)
+        db.init_db()
+        with db.get_conn() as conn:
+            self.assertEqual(('["Business"]', 1, '{}', '{}'), tuple(conn.execute(
+                'SELECT selected_categories, onboarded, focused_interests, summary_style FROM preferences'
+            ).fetchone()))
+            conn.execute("UPDATE preferences SET focused_interests = ?", ('{"Business":{"topics":["Energy"],"teams":{}}}',))
+            conn.execute("UPDATE preferences SET summary_style = ?", ('{"tone":"analytical","length":"brief","format":"bullets"}',))
+        db.init_db()
+        with db.get_conn() as conn:
+            self.assertIn('Energy', conn.execute('SELECT focused_interests FROM preferences').fetchone()[0])
+            self.assertIn('analytical', conn.execute('SELECT summary_style FROM preferences').fetchone()[0])
+
     def test_declared_uniqueness_single_row_and_foreign_key_constraints(self) -> None:
         db.init_db()
 
@@ -222,6 +242,8 @@ class PostgresDatabaseTests(unittest.TestCase):
         self.assertTrue(any("CREATE TABLE IF NOT EXISTS news.articles" in query for query in queries))
         self.assertTrue(any("ADD COLUMN IF NOT EXISTS read_at" in query for query in queries))
         self.assertEqual(6, sum("ENABLE ROW LEVEL SECURITY" in query for query in queries))
+        self.assertTrue(any("ADD COLUMN IF NOT EXISTS focused_interests" in query for query in queries))
+        self.assertTrue(any("ADD COLUMN IF NOT EXISTS summary_style" in query for query in queries))
         self.assertEqual(len(db.STARTER_FEEDS), sum("INSERT INTO feeds" in query for query in queries))
         self.assertTrue(any("ON CONFLICT(id) DO NOTHING" in query for query in queries))
 

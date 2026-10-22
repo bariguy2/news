@@ -1,5 +1,7 @@
 import { expect, test } from '@playwright/test'
 
+const backendURL = `http://127.0.0.1:${process.env.NEWS_E2E_BACKEND_PORT ?? '8000'}`
+
 
 test('onboarding leads to a filtered feed, detail, and source link', async ({ page, context }) => {
   test.setTimeout(45_000)
@@ -7,7 +9,77 @@ test('onboarding leads to a filtered feed, detail, and source link', async ({ pa
 
   await expect(page.getByRole('heading', { name: 'What should make your front page?' })).toBeVisible()
   await page.getByRole('checkbox', { name: 'Tech' }).check()
+  await page.getByRole('checkbox', { name: 'Business' }).check()
+  await page.getByRole('checkbox', { name: 'Sports' }).check()
+  await page.getByRole('button', { name: 'Continue' }).click()
+  await expect(page.getByRole('heading', { name: 'Make it more your own.' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Science', exact: true })).toHaveCount(0)
+  await page.getByRole('checkbox', { name: 'Finance & banking' }).check()
+  await page.getByRole('checkbox', { name: 'Artificial intelligence', exact: true }).check()
+  await page.getByRole('checkbox', { name: 'Basketball', exact: true }).check()
+  await page.getByRole('checkbox', { name: 'Toronto Raptors', exact: true }).check()
+  await page.getByRole('textbox', { name: 'Add another basketball team' }).fill('Ottawa BlackJacks')
+  await page.getByRole('button', { name: 'Add team' }).click()
+  await page.getByRole('button', { name: 'Back to categories' }).click()
+  await expect(page.getByRole('checkbox', { name: 'Business' })).toBeChecked()
+  await expect(page.getByRole('checkbox', { name: 'Sports' })).toBeChecked()
+  await page.getByRole('button', { name: 'Continue' }).click()
+  await expect(page.getByRole('checkbox', { name: 'Toronto Raptors' })).toBeChecked()
+  await expect(page.getByRole('checkbox', { name: 'Ottawa BlackJacks' })).toBeChecked()
+  await expect(page.getByRole('checkbox', { name: 'Finance & banking' })).toBeChecked()
+  const beforeSave = await (await page.request.get(`${backendURL}/api/preferences`)).json()
+  expect(beforeSave.onboarded).toBe(false)
+  await page.screenshot({ path: 'test-results/news-onboarding-interests-desktop.png', fullPage: true })
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.screenshot({ path: 'test-results/news-onboarding-interests-mobile.png', fullPage: true })
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+  await page.setViewportSize({ width: 1280, height: 720 })
+  await page.getByRole('button', { name: 'Continue' }).click()
+  await expect(page.getByRole('heading', { name: 'How do you like your news?' })).toBeVisible()
+  await page.getByRole('radio', { name: 'Conversational' }).check()
+  await page.getByRole('radio', { name: 'Brief' }).check()
+  await page.getByRole('radio', { name: 'Mixed' }).check()
+  await page.getByRole('button', { name: 'Back to topics' }).click()
+  await expect(page.getByRole('checkbox', { name: 'Finance & banking' })).toBeChecked()
+  await expect(page.getByRole('checkbox', { name: 'Toronto Raptors' })).toBeChecked()
+  await page.getByRole('button', { name: 'Continue' }).click()
+  await expect(page.getByRole('radio', { name: 'Conversational' })).toBeChecked()
+  await expect(page.getByRole('radio', { name: 'Brief' })).toBeChecked()
+  await expect(page.getByRole('radio', { name: 'Mixed' })).toBeChecked()
+  const preview = page.locator('.style-preview')
+  const typedTextLength = () => preview.locator('.typing-preview-visible').evaluateAll((elements) =>
+    elements.reduce((total, element) => total + element.textContent.length, 0))
+  const fullPreviewLength = await preview.locator('.typing-preview-reserve').evaluateAll((elements) =>
+    elements.reduce((total, element) => total + element.textContent.length, 0))
+  const initialTyped = await typedTextLength()
+  const previewHeight = (await preview.boundingBox()).height
+  await expect.poll(typedTextLength, { timeout: 1_000 }).toBeGreaterThan(initialTyped)
+  expect(await typedTextLength()).toBeLessThan(fullPreviewLength)
+  expect((await preview.boundingBox()).height).toBe(previewHeight)
+  await page.screenshot({ path: 'test-results/news-summary-preview-typing.png', fullPage: true })
+  await page.emulateMedia({ reducedMotion: 'reduce' })
+  await expect(preview.locator('[data-typing="true"]')).toHaveCount(0)
+  expect(await typedTextLength()).toBe(fullPreviewLength)
+  await page.getByRole('radio', { name: 'Bullet points' }).check()
+  await expect(preview.locator('[data-typing="true"]')).toHaveCount(0)
+  await page.getByRole('radio', { name: 'Mixed' }).check()
+  await page.emulateMedia({ reducedMotion: 'no-preference' })
+  await expect(preview.locator('[data-typing="true"]')).toHaveCount(0, { timeout: 5_000 })
+  await page.screenshot({ path: 'test-results/news-summary-style-desktop.png', fullPage: true })
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.screenshot({ path: 'test-results/news-summary-style-mobile.png', fullPage: true })
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+  await page.setViewportSize({ width: 1280, height: 720 })
+  const savedPreferences = page.waitForResponse((response) => response.request().method() === 'POST'
+    && new URL(response.url()).pathname === '/api/preferences')
   await page.getByRole('button', { name: 'Build my briefing' }).click()
+  const preferences = await (await savedPreferences).json()
+  expect(preferences.summary_style).toEqual({ tone: 'conversational', length: 'brief', format: 'mixed' })
+  expect(preferences.focused_interests).toEqual({
+    Business: { topics: ['Finance & banking'], teams: {} },
+    Tech: { topics: ['Artificial intelligence'], teams: {} },
+    Sports: { topics: ['Basketball'], teams: { Basketball: ['Toronto Raptors', 'Ottawa BlackJacks'] } },
+  })
 
   await expect(page).toHaveURL(/\/feed$/)
   await expect(page.getByRole('heading', { name: 'Your briefing' })).toBeVisible()
@@ -43,6 +115,9 @@ test('onboarding leads to a filtered feed, detail, and source link', async ({ pa
   await pendingPopup.close()
   await expect(pendingCard.getByText('Read', { exact: true })).toBeVisible()
   await page.reload()
+  const persistedPreferences = await (await page.request.get(`${backendURL}/api/preferences`)).json()
+  expect(persistedPreferences.focused_interests).toEqual(preferences.focused_interests)
+  expect(persistedPreferences.summary_style).toEqual(preferences.summary_style)
   await expect(pendingCard.getByText('Read', { exact: true })).toBeVisible()
   await expect(pendingCard.getByText('Summary in progress')).toBeVisible()
 
@@ -92,6 +167,8 @@ test('onboarding leads to a filtered feed, detail, and source link', async ({ pa
   await expect(page.getByRole('heading', { name: 'Summary processing' })).toHaveCount(0)
   await page.getByRole('link', { name: 'Open summary: Technology story you can choose' }).click()
   await expect(page.getByText('Requested facts are ready.')).toBeVisible()
+  await expect(page.locator('.facts-section').getByRole('listitem')).toHaveText('Requested facts are ready.')
+  await expect(page.locator('.impact-panel').getByRole('list')).toHaveCount(0)
   await expect(page.getByText('Requested impact is ready.')).toBeVisible()
   await expect(page.getByText('Read', { exact: true })).toBeVisible()
   await page.goto('/feed')

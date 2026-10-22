@@ -99,9 +99,13 @@ def init_db() -> None:
                 conn.execute("ALTER TABLE articles ADD COLUMN read_at TEXT")
             if "summary_version_id" not in columns:
                 conn.execute("ALTER TABLE articles ADD COLUMN summary_version_id TEXT")
+            preference_columns = {row["name"] for row in conn.execute("PRAGMA table_info(preferences)")}
+            if "focused_interests" not in preference_columns:
+                conn.execute("ALTER TABLE preferences ADD COLUMN focused_interests TEXT NOT NULL DEFAULT '{}'")
+            if "summary_style" not in preference_columns:
+                conn.execute("ALTER TABLE preferences ADD COLUMN summary_style TEXT NOT NULL DEFAULT '{}'")
 
-        # Preserve existing completed/failed-regeneration output without inventing
-        # model attribution. Idempotent; concurrent initializers use a row claim.
+        # Preserve existing output with both sets of schema migrations in place.
         from app.summarize.versions import preserve_legacy
         preserve_legacy(conn)
 

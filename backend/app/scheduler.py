@@ -21,6 +21,7 @@ from app.ingest.extract import extract_full_text
 from app.ingest.rss import fetch_all_feeds
 from app.summarize.service import Generation, summarize_text
 from app.summarize.versions import save_version
+from app.summarize.style import SummaryStyle
 from app.summary_progress import start_batch, update_article, finish_article, interrupt_batch
 
 
@@ -73,7 +74,16 @@ def _selected_categories(conn: DatabaseConnection) -> list[str]:
     )
 
 
-def _process_article(article: dict[str, object]) -> ArticleResult:
+def _summary_style(conn: DatabaseConnection) -> SummaryStyle:
+    row = conn.execute('SELECT summary_style FROM preferences WHERE id = 1').fetchone()
+    try:
+        return SummaryStyle.model_validate(json.loads(row['summary_style'])) if row else SummaryStyle()
+    except (ValueError, TypeError):
+        logger.warning('Invalid stored summary style; using defaults')
+        return SummaryStyle()
+
+
+def _process_article(article: dict[str, object], style: SummaryStyle) -> ArticleResult:
     article_id = int(article["id"])
     extracted_text = None
     extraction_ok = False
@@ -87,7 +97,7 @@ def _process_article(article: dict[str, object]) -> ArticleResult:
             if extraction_ok and extracted_text
             else str(article["raw_excerpt"] or "")
         )
-        summary = summarize_text(summary_input, on_progress=lambda stage, percent:
+        summary = summarize_text(summary_input, style=style, on_progress=lambda stage, percent:
                                  update_article(article_id, stage, percent))
     except Exception:
         logger.exception("Unexpected pipeline failure for article %s", article_id)
@@ -145,8 +155,9 @@ def _save_article_result(conn: DatabaseConnection, result: ArticleResult) -> boo
 def _submit_article(
     executor: ThreadPoolExecutor,
     article: dict[str, object] | sqlite3.Row,
+    style: SummaryStyle,
 ) -> Future[ArticleResult]:
-    return executor.submit(_process_article, dict(article))
+    return executor.submit(_process_article, dict(article), style)
 
 
 def _run_pipeline_cycle(*, fetch_feeds: bool = True) -> None:
@@ -160,6 +171,8 @@ def _run_pipeline_cycle(*, fetch_feeds: bool = True) -> None:
         if not categories and fetch_feeds:
             logger.info("Pipeline skipped because no categories are selected")
             return
+
+        style = _summary_style(conn)
 
         now = _utc_now()
         cutoff = (now - timedelta(hours=RECENCY_WINDOW_HOURS)).isoformat()
@@ -212,7 +225,7 @@ def _run_pipeline_cycle(*, fetch_feeds: bool = True) -> None:
         with ThreadPoolExecutor(max_workers=PIPELINE_CONCURRENCY) as executor:
             futures: dict[Future[ArticleResult], int] = {}
             for article in article_iterator:
-                future = _submit_article(executor, article)
+                future = _submit_article(executor, article, style)
                 futures[future] = article["id"]
                 if len(futures) == PIPELINE_CONCURRENCY:
                     break
@@ -238,7 +251,7 @@ def _run_pipeline_cycle(*, fetch_feeds: bool = True) -> None:
 
                 next_article = next(article_iterator, None)
                 if next_article is not None:
-                    next_future = _submit_article(executor, next_article)
+                    next_future = _submit_article(executor, next_article, style)
                     futures[next_future] = next_article["id"]
 
     logger.info(

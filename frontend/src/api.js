@@ -17,11 +17,11 @@ export function getPreferences() {
 }
 
 
-export function updatePreferences(selectedCategories) {
+export function updatePreferences(selectedCategories, focusedInterests = {}, summaryStyle) {
   return apiFetch('/api/preferences', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ selected_categories: selectedCategories }),
+    body: JSON.stringify({ selected_categories: selectedCategories, focused_interests: focusedInterests, summary_style: summaryStyle }),
   })
 }
 

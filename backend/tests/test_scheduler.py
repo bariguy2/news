@@ -120,7 +120,7 @@ class PipelineTests(unittest.TestCase):
         release_second = Event()
         calls = 0
 
-        def summarize(_text, *, on_progress=None):
+        def summarize(_text, *, on_progress=None, style=None):
             nonlocal calls
             calls += 1
             if calls == 2:
@@ -395,7 +395,7 @@ class PipelineTests(unittest.TestCase):
 
         self.assertEqual("failed", statuses[failed_id])
         self.assertEqual("done", statuses[done_id])
-        summarize_mock.assert_called_once_with("Usable excerpt", on_progress=ANY)
+        summarize_mock.assert_called_once_with("Usable excerpt", on_progress=ANY, style=ANY)
         self.assertTrue(any("broken extractor" in line for line in logs.output))
 
     @patch("app.scheduler.fetch_all_feeds", side_effect=RuntimeError("database issue"))
@@ -547,6 +547,25 @@ class PipelineTests(unittest.TestCase):
             )}
         self.assertEqual("done", states[queued_id])
         self.assertEqual("unrequested", states[untouched_id])
+
+    def test_requested_summaries_use_saved_style_and_invalid_storage_falls_back(self) -> None:
+        from app.summarize.style import SummaryStyle
+        article_id = self.insert_article('https://example.com/styled')
+        chosen = SummaryStyle(tone='conversational', length='brief', format='mixed')
+        with db.get_conn() as conn:
+            conn.execute('UPDATE preferences SET summary_style = ?', (chosen.model_dump_json(),))
+        with patch('app.scheduler.fetch_all_feeds') as fetch, \
+             patch('app.scheduler.extract_full_text', return_value=('Text', True)), \
+             patch('app.scheduler.summarize_text', return_value=Generation('- Facts', 'Impact', 'fixture', 'test', 'v3-styles', 'hash')) as model:
+            scheduler_module.run_requested_summaries()
+            self.assertEqual(chosen, model.call_args.kwargs['style'])
+            fetch.assert_not_called()
+            with db.get_conn() as conn:
+                conn.execute("UPDATE articles SET summary_status = 'pending' WHERE id = ?", (article_id,))
+                conn.execute("UPDATE preferences SET summary_style = 'invalid json'")
+            with self.assertLogs('app.scheduler', level='WARNING'):
+                scheduler_module.run_requested_summaries()
+            self.assertEqual(SummaryStyle(), model.call_args.kwargs['style'])
 
     def test_overlap_preserves_a_refresh_when_summary_request_is_also_queued(self) -> None:
         started = Event()
