@@ -62,6 +62,8 @@ The system uses:
   Completed summaries are reused; public `regenerate=true` returns 403.
   Operator regeneration is queued through `python -m app.summarize.manage`.
   Detail responses include `summary_version_id` for future feedback attribution.
+  Lists prioritize completed summaries, then publication time descending with
+  undated articles last and descending ID as a tiebreaker, before applying limits.
 - Frontend: React Router provides preference-gated onboarding, a
   category-filtered headline feed, and summary detail routes. Vite reads the API
   origin from `VITE_API_BASE`; the feed polls every five seconds while empty or
@@ -92,6 +94,35 @@ Important invariants:
 - Keep the REST API client-agnostic for later mobile reuse.
 
 ## Current status
+
+### Completed summaries first in the feed (2026-10-23)
+
+At the user's request, completed summaries now appear above unrequested,
+pending and failed stories. Both groups retain newest-first publication order,
+with missing dates last and descending article ID breaking ties. The API orders
+before its existing limit and after category/search filtering, so newer
+untouched headlines cannot crowd older completed summaries out of the result.
+Feed applies the same ordering immediately when progress confirms completion,
+including while an older list request remains in flight. This supersedes the
+plan's purely chronological list ordering; schemas, response shapes, retention,
+read state and AI behavior are unchanged.
+
+Verification: the 19 focused API tests and 11 feed tests pass. Checks cover
+completed-first/newest-first ordering, ties, missing dates, category/search
+filters, limit boundaries and immediate movement after completion. Isolated
+Chrome E2E passes, including ordering before generation and promotion while
+a stale list response is held. These test-owned servers and browsers exited;
+isolated ports were verified closed. No full-suite rerun was needed for this
+small sorting change. No live AI call or application reset was used for tests.
+
+The user authorized a development backend restart after the old process failed
+to reload the query. That restart was interrupted before completion; on resume,
+neither old backend nor frontend was running. Backend was started again with
+the existing private dotenv configuration and is tracked in the ignored
+.run/windows-dev.json (root PID 38068). A live read-only API check confirms
+summarized articles 4093, 4092 and 3960 now precede new untouched headlines.
+The backend remains available as requested; frontend was not relaunched.
+The user has approved committing and pushing this change on chunny22/frontend.
 
 ### First-open summary typing (2026-10-22)
 

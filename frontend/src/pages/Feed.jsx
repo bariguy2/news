@@ -166,6 +166,13 @@ function Feed() {
     }
   }, [reloadKey, query])
 
+  // Apply the same order immediately when progress reports completion,
+  // including while the next API list response is still in flight.
+  const orderedArticles = [...articles].sort((left, right) =>
+    Number(right.summary_status === 'done') - Number(left.summary_status === 'done')
+      || (right.published_at ?? '').localeCompare(left.published_at ?? '')
+      || right.id - left.id)
+
   return (
     <main className="feed-page">
       <header className="feed-header">
@@ -223,7 +230,7 @@ function Feed() {
 
       {!loading && !error && articles.length > 0 && (
         <section className="story-list" aria-label="Headlines">
-          {articles.map((article) => article.summary_status !== 'done' ? (
+          {orderedArticles.map((article) => article.summary_status !== 'done' ? (
             <article className={`story-card story-card-pending${article.read_at ? ' story-card-read' : ''}`} key={article.id}>
               <StoryCardContent article={article} />
               <p className="summary-pending" aria-live="polite">

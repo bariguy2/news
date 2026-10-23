@@ -115,12 +115,12 @@ class ApiTests(unittest.TestCase):
 
         self.assertEqual(200, response.status_code)
         articles = response.json()
-        self.assertEqual([unrequested_id, failed_id, pending_id, business_id, tech_id, world_id], [item["id"] for item in articles])
+        self.assertEqual([business_id, tech_id, world_id, unrequested_id, failed_id, pending_id], [item["id"] for item in articles])
         self.assertEqual(
             {"id", "title", "source", "category", "published_at", "url", "summary_status", "read_at"},
             set(articles[0]),
         )
-        self.assertEqual(["unrequested", "failed", "pending", "done", "done", "done"], [item["summary_status"] for item in articles])
+        self.assertEqual(["done", "done", "done", "unrequested", "failed", "pending"], [item["summary_status"] for item in articles])
         for article in articles:
             self.assertNotIn("summary_facts", article)
             self.assertNotIn("summary_impact", article)
@@ -132,7 +132,7 @@ class ApiTests(unittest.TestCase):
             params={"category": " Tech, World,Tech ", "limit": 1},
         )
         self.assertEqual(200, filtered.status_code)
-        self.assertEqual([unrequested_id], [item["id"] for item in filtered.json()])
+        self.assertEqual([tech_id], [item["id"] for item in filtered.json()])
 
         with db.get_conn() as conn:
             conn.execute(
@@ -141,7 +141,7 @@ class ApiTests(unittest.TestCase):
             )
         completed = self.client.get(
             "/api/articles", params={"category": "Tech"}
-        ).json()[2]
+        ).json()[0]
         self.assertEqual(pending_id, completed["id"])
         self.assertEqual("done", completed["summary_status"])
 
@@ -218,6 +218,23 @@ class ApiTests(unittest.TestCase):
 
         self.assertEqual(200, response.status_code)
         self.assertEqual(50, len(response.json()))
+
+    def test_completed_articles_stay_above_new_headlines_before_limit(self) -> None:
+        old_done = self.insert_article("old-done", category="Tech", published_at="2026-07-01")
+        tied_done = self.insert_article("tied-done", category="Tech", published_at="2026-07-01")
+        undated_done = self.insert_article("undated-done", category="Tech", published_at=None)
+        for index in range(51):
+            latest = self.insert_article(f"fresh-{index}", category="Tech", published_at="2026-07-08", status="unrequested")
+
+        rows = self.client.get("/api/articles", params={"category": "Tech"}).json()
+        self.assertEqual(50, len(rows))
+        self.assertEqual([tied_done, old_done, undated_done, latest], [row["id"] for row in rows[:4]])
+        self.assertEqual([tied_done], [row["id"] for row in self.client.get(
+            "/api/articles", params={"limit": 1, "category": "Tech"}
+        ).json()])
+        self.assertEqual([latest], [row["id"] for row in self.client.get(
+            "/api/articles", params={"limit": 1, "q": "fresh-"}
+        ).json()])
 
     def test_article_detail_returns_404_for_missing_or_incomplete_article(self) -> None:
         pending_id = self.insert_article(

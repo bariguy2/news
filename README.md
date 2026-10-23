@@ -241,6 +241,12 @@ the old stored sections but use the existing failed-card/retry flow; pending or
 failed details remain unavailable. Detail responses include `summary_version_id`.
 Startup archives existing summaries as `legacy` with unknown model attribution.
 
+Completed summaries appear at the top of the feed, followed by all other
+articles. Each group stays newest first by publication time, with undated
+stories last and article ID breaking ties. This ordering applies within the
+current category/search filters and before the API's result limit. Newly
+completed summaries move up immediately when progress reports completion.
+
 Use **Search articles** at the top of the feed to find fetched stories in your
 selected categories. Search ignores letter case and matches a literal phrase
 in titles, sources, categories, RSS excerpts, and available FACTS/IMPACT summaries.

@@ -83,6 +83,7 @@ test('onboarding leads to a filtered feed, detail, and source link', async ({ pa
 
   await expect(page).toHaveURL(/\/feed$/)
   await expect(page.getByRole('heading', { name: 'Your briefing' })).toBeVisible()
+  await expect(page.locator('.story-list h2').first()).toHaveText('Browser-tested technology story')
   await expect(page.getByText('Browser-tested technology story')).toBeVisible()
   await expect(page.getByText('Technology story awaiting a summary')).toBeVisible()
   await expect(page.getByText('Summary in progress')).toBeVisible()
@@ -161,6 +162,7 @@ test('onboarding leads to a filtered feed, detail, and source link', async ({ pa
   try {
     expect(delayedFeedResponse).toBe(true)
     await expect(page.getByRole('link', { name: 'Open summary: Technology story you can choose' })).toBeVisible({ timeout: 1_000 })
+    await expect(page.locator('.story-list h2').first()).toHaveText('Technology story you can choose')
   } finally {
     releaseFeedResponse?.()
   }

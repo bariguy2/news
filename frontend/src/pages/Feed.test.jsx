@@ -211,19 +211,25 @@ describe('feed polling', () => {
 
   it('opens a completed summary immediately before the five-second feed refresh', async () => {
     const pending = { id: 40, title: 'Immediate summary', source: 'Source', category: 'Tech',
-      published_at: null, url: 'https://example.com/immediate', summary_status: 'pending' }
+      published_at: '2026-10-22T12:00:00Z', url: 'https://example.com/immediate', summary_status: 'pending' }
+    const olderDone = { ...pending, id: 39, title: 'Older ready summary', summary_status: 'done', published_at: '2026-10-21T12:00:00Z' }
+    const newerUntouched = { ...pending, id: 42, title: 'New headline', summary_status: 'unrequested', published_at: '2026-10-22T13:00:00Z' }
     let finishRefresh
-    getArticles.mockReset().mockResolvedValueOnce([pending])
+    getArticles.mockReset().mockResolvedValueOnce([olderDone, newerUntouched, pending])
       .mockImplementationOnce(() => new Promise((resolve) => { finishRefresh = resolve }))
     getArticleProgress.mockResolvedValueOnce({ stage: 'summarizing', percentage: 80 })
       .mockResolvedValue({ stage: 'done', percentage: 100 })
     render(<MemoryRouter><Feed /></MemoryRouter>)
     await act(async () => {})
+    expect(screen.getAllByRole('heading', { level: 2 }).map((heading) => heading.textContent))
+      .toEqual(['Older ready summary', 'New headline', 'Immediate summary'])
     expect(screen.queryByRole('link', { name: 'Open summary: Immediate summary' })).not.toBeInTheDocument()
     await act(async () => { await vi.advanceTimersByTimeAsync(1_000) })
     expect(screen.getByRole('link', { name: 'Open summary: Immediate summary' })).toBeVisible()
+    expect(screen.getAllByRole('heading', { level: 2 }).map((heading) => heading.textContent))
+      .toEqual(['Immediate summary', 'Older ready summary', 'New headline'])
     expect(getArticles).toHaveBeenCalledTimes(2)
-    await act(async () => { finishRefresh([{ ...pending, summary_status: 'done' }]) })
+    await act(async () => { finishRefresh([{ ...pending, summary_status: 'done' }, olderDone, newerUntouched]) })
   })
 
   it('keeps completion visible when an older in-flight feed poll returns pending', async () => {

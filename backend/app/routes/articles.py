@@ -96,7 +96,8 @@ def list_articles(
             SELECT id, title, source, category, published_at, url, summary_status, read_at
             FROM articles
             WHERE {' AND '.join(where)}
-            ORDER BY published_at DESC, id DESC
+            ORDER BY CASE WHEN summary_status = 'done' THEN 0 ELSE 1 END,
+                     published_at DESC NULLS LAST, id DESC
             LIMIT ?
             """,
             parameters,
