@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { getArticle, markArticleRead } from '../api.js'
 import { formatRelativeTime } from '../time.js'
@@ -32,6 +32,7 @@ function Detail() {
   const finishAnimation = useCallback(() => setAnimateSummary(false), [])
   const currentId = useRef(id)
   currentId.current = id
+  useLayoutEffect(() => { window.scrollTo({ top: 0, left: 0, behavior: 'instant' }) }, [id])
   async function retryRead() {
     setSavingRead(true)
     try {

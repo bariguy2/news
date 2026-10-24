@@ -149,6 +149,10 @@ test('onboarding leads to a filtered feed, detail, and source link', async ({ pa
   await expect(pendingCard.getByText('Read', { exact: true })).toBeVisible()
   await expect(pendingCard.getByText('Summary in progress')).toBeVisible()
 
+  const searchedFeed = page.waitForResponse((response) => new URL(response.url()).pathname === '/api/articles'
+    && new URL(response.url()).searchParams.get('q') === 'Technology')
+  await search.fill('Technology')
+  await searchedFeed
   const choice = page.getByRole('button', { name: 'Summarize: Technology story you can choose' })
   await expect(choice).toBeVisible()
   await expect(page.getByRole('link', { name: 'Open summary: Technology story you can choose' })).toHaveCount(0)
@@ -194,23 +198,35 @@ test('onboarding leads to a filtered feed, detail, and source link', async ({ pa
   } finally {
     releaseFeedResponse?.()
   }
-  await page.setViewportSize({ width: 1280, height: 720 })
+  await page.setViewportSize({ width: 390, height: 600 })
   await expect(page.getByRole('heading', { name: 'Summary processing' })).toHaveCount(0)
-  await page.getByRole('link', { name: 'Open summary: Technology story you can choose' }).click()
+  const chosenSummary = page.getByRole('link', { name: 'Open summary: Technology story you can choose' })
+  await chosenSummary.scrollIntoViewIfNeeded()
+  const chosenOffset = (await chosenSummary.boundingBox()).y
+  expect(await page.evaluate(() => window.scrollY)).toBeGreaterThan(0)
+  await chosenSummary.click()
   await expect(page.getByText('Requested facts are ready.')).toBeVisible()
   await expect(page.locator('.facts-section').getByRole('listitem')).toHaveText('Requested facts are ready.')
   await expect(page.locator('.impact-panel').getByRole('list')).toHaveCount(0)
   await expect(page.getByText('Requested impact is ready.')).toBeVisible()
   await expect(page.getByText('Read', { exact: true })).toBeVisible()
-  await page.goto('/feed')
+  expect(await page.evaluate(() => window.scrollY)).toBe(0)
+  await page.goBack()
+  await expect(page).toHaveURL(/\/feed$/)
+  await expect(search).toHaveValue('Technology')
   await expect(page.getByRole('link', { name: 'Open summary: Technology story you can choose' })).toBeVisible()
   await expect(page.locator('.story-list h2').first()).toHaveText('Technology story you can choose')
+  await expect.poll(async () => Math.abs((await chosenSummary.boundingBox()).y - chosenOffset)).toBeLessThan(4)
   await expect(page.getByRole('link', { name: 'Open summary: Technology story you can choose' }).getByText('Read', { exact: true })).toBeVisible()
   await page.screenshot({ path: 'test-results/news-feed-choice.png', fullPage: true })
 
+  await page.setViewportSize({ width: 1280, height: 720 })
   await page.clock.install()
   await page.clock.pauseAt(new Date())
-  await page.getByRole('link', { name: /Browser-tested technology story/ }).click()
+  const originalSummary = page.getByRole('link', { name: /Open summary: Browser-tested technology story/ })
+  await originalSummary.scrollIntoViewIfNeeded()
+  const originalOffset = (await originalSummary.boundingBox()).y
+  await originalSummary.click()
 
   await expect(page).toHaveURL(/\/article\/1$/)
   await expect(page.getByRole('heading', { name: 'Browser-tested technology story' })).toBeVisible()
@@ -239,6 +255,12 @@ test('onboarding leads to a filtered feed, detail, and source link', async ({ pa
   await expect(page.getByRole('heading', { name: 'Why it matters' })).toBeVisible()
   await expect(page.getByText('The impact explanation is visually distinct and available.')).toBeVisible()
   await expect(page.getByText('Read', { exact: true })).toBeVisible()
+  await page.getByRole('link', { name: /Your briefing/ }).click()
+  await expect(search).toHaveValue('Technology')
+  await expect(originalSummary).toBeVisible()
+  await expect.poll(async () => Math.abs((await originalSummary.boundingBox()).y - originalOffset)).toBeLessThan(4)
+  await originalSummary.click()
+  await expect(page.getByText('The verified facts are visible in the browser.')).toBeVisible()
   await page.reload()
   await expect(page.getByRole('heading', { name: 'Browser-tested technology story' })).toBeVisible()
   await expect(page.locator('.typing-preview-text')).toHaveCount(0)

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { getArticles, getPreferences, requestSummary, markArticleRead } from '../api.js'
 import { formatRelativeTime } from '../time.js'
@@ -25,10 +25,12 @@ function StoryCardContent({ article }) {
 }
 
 
-function Feed() {
+function Feed({ savedView }) {
+  const localView = useRef({ search: '', position: null })
+  const view = savedView ?? localView
   const [articles, setArticles] = useState([])
-  const [search, setSearch] = useState('')
-  const [query, setQuery] = useState('')
+  const [search, setSearch] = useState(view.current.search)
+  const [query, setQuery] = useState(() => view.current.search.trim())
   const [categories, setCategories] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -39,6 +41,49 @@ function Feed() {
   const savedReads = useRef({})
   const refreshArticles = useRef(() => {})
   const summaryUpdates = useRef({ revision: 0, articles: {} })
+  const listRef = useRef(null)
+  const returnPosition = useRef(view.current.position)
+  const positionRestored = useRef(false)
+  const openedArticle = useRef(false)
+  const latestSearch = useRef(search)
+  latestSearch.current = search
+
+  useLayoutEffect(() => () => {
+    view.current.search = latestSearch.current
+    if (openedArticle.current || !listRef.current) return
+    const visible = [...listRef.current.querySelectorAll('[data-article-id]')]
+      .find((card) => card.getBoundingClientRect().bottom > 0)
+    if (visible) view.current.position = { articleId: visible.dataset.articleId,
+      offset: visible.getBoundingClientRect().top, scrollY: window.scrollY }
+  }, [view])
+
+  useLayoutEffect(() => {
+    if (loading || error || positionRestored.current) return
+    positionRestored.current = true
+    const position = returnPosition.current
+    const anchor = position && [...(listRef.current?.querySelectorAll('[data-article-id]') ?? [])]
+      .find((card) => card.dataset.articleId === position.articleId)
+    const top = anchor ? window.scrollY + anchor.getBoundingClientRect().top - position.offset
+      : position?.scrollY ?? 0
+    window.scrollTo({ top: Math.max(0, top), left: 0, behavior: 'instant' })
+    anchor?.focus({ preventScroll: true })
+  }, [loading, error])
+
+  function changeSearch(value) {
+    positionRestored.current = true
+    returnPosition.current = null
+    view.current.position = null
+    openedArticle.current = false
+    setSearch(value)
+  }
+
+  function rememberArticle(event, articleId) {
+    if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return
+    openedArticle.current = true
+    view.current.search = search
+    view.current.position = { articleId: String(articleId),
+      offset: event.currentTarget.getBoundingClientRect().top, scrollY: window.scrollY }
+  }
 
   const handleSummaryStatus = useCallback((articleId, status) => {
     if (status !== 'done' && status !== 'failed') return
@@ -206,9 +251,9 @@ function Feed() {
           <input id="article-search" type="search" maxLength={200}
             placeholder="Search by keyword…" value={search}
             aria-describedby="search-help"
-            onChange={(event) => setSearch(event.target.value)} />
+            onChange={(event) => changeSearch(event.target.value)} />
           {search && <button type="button" className="secondary-button"
-            onClick={() => { setSearch(''); setQuery('') }}>Clear search</button>}
+            onClick={() => { changeSearch(''); setQuery('') }}>Clear search</button>}
         </div>
         <p id="search-help">Search fetched stories in your selected categories, including available AI summaries.</p>
       </div>
@@ -233,9 +278,9 @@ function Feed() {
       )}
 
       {!loading && !error && articles.length > 0 && (
-        <section className="story-list" aria-label="Headlines">
+        <section className="story-list" aria-label="Headlines" ref={listRef}>
           {articles.map((article) => article.summary_status !== 'done' ? (
-            <article className={`story-card story-card-pending${article.read_at ? ' story-card-read' : ''}`} key={article.id}>
+            <article className={`story-card story-card-pending${article.read_at ? ' story-card-read' : ''}`} key={article.id} data-article-id={article.id}>
               <StoryCardContent article={article} />
               <p className="summary-pending" aria-live="polite">
                 {article.summary_status === 'pending' ? 'Summary in progress'
@@ -272,6 +317,8 @@ function Feed() {
               aria-label={`Open summary: ${article.title}`}
               className={`story-card${article.read_at ? ' story-card-read' : ''}`}
               to={`/article/${article.id}`}
+              data-article-id={article.id}
+              onClick={(event) => rememberArticle(event, article.id)}
               key={article.id}
             >
               <article>

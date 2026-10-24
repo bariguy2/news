@@ -250,6 +250,14 @@ keep their relative order as progress updates; Open summary becomes available
 immediately in place, and new arrivals append below the current cards. Leaving
 and returning to the feed applies the summarized-first order again.
 
+Opening a summary preserves your feed search and place for return through
+**Your briefing** or browser Back. After fresh results load, the opened article
+is restored to its previous screen offset even if its rank changed, with scroll
+clamped to the available page. If it is no longer in the results, the old scroll
+position is used instead. Summary pages open at the top. Clearing/changing the
+search clears the old position. This view state stays in memory within the open
+app; a full page reload resets it, and no article data is cached for restoration.
+
 Use **Search articles** at the top of the feed to find fetched stories in your
 selected categories. Search ignores letter case and matches a literal phrase
 in titles, sources, categories, RSS excerpts, and available FACTS/IMPACT summaries.

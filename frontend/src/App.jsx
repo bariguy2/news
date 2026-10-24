@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Navigate, Route, Routes } from 'react-router-dom'
 import { getPreferences } from './api.js'
 import Detail from './pages/Detail.jsx'
@@ -10,6 +10,13 @@ function App() {
   const [preferences, setPreferences] = useState(null)
   const [error, setError] = useState('')
   const [reloadKey, setReloadKey] = useState(0)
+  const feedView = useRef({ search: '', position: null })
+
+  useEffect(() => {
+    const previous = window.history.scrollRestoration
+    window.history.scrollRestoration = 'manual'
+    return () => { window.history.scrollRestoration = previous }
+  }, [])
 
   useEffect(() => {
     let active = true
@@ -63,7 +70,7 @@ function App() {
       />
       <Route
         path="/feed"
-        element={preferences.onboarded ? <Feed /> : <Navigate to="/onboarding" replace />}
+        element={preferences.onboarded ? <Feed savedView={feedView} /> : <Navigate to="/onboarding" replace />}
       />
       <Route
         path="/article/:id"

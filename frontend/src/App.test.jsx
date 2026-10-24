@@ -15,9 +15,14 @@ function response(data, status = 200) {
 
 describe('news application flow', () => {
   let onboarded
+  let feedRows
+  let failFeed
 
   beforeEach(() => {
     onboarded = false
+    failFeed = false
+    feedRows = [{ id: 7, title: 'A useful technology headline', source: 'Tech Source', category: 'Tech',
+      published_at: '2026-07-06T10:00:00Z', url: 'https://example.com/tech', summary_status: 'done' }]
     vi.stubGlobal('fetch', vi.fn(async (url, options = {}) => {
       const request = new URL(url)
       const method = options.method ?? 'GET'
@@ -36,15 +41,7 @@ describe('news application flow', () => {
         return response({ onboarded: true, selected_categories: ['Tech'] })
       }
       if (request.pathname === '/api/articles' && request.searchParams.get('category') === 'Tech') {
-        return response([{
-          id: 7,
-          title: 'A useful technology headline',
-          source: 'Tech Source',
-          category: 'Tech',
-          published_at: '2026-07-06T10:00:00Z',
-          url: 'https://example.com/tech',
-          summary_status: 'done',
-        }])
+        return failFeed ? response({}, 500) : response(feedRows)
       }
       if (request.pathname === '/api/articles/7') {
         return response({
@@ -66,6 +63,7 @@ describe('news application flow', () => {
   })
 
   afterEach(() => {
+    vi.restoreAllMocks()
     vi.unstubAllGlobals()
   })
 
@@ -102,5 +100,66 @@ describe('news application flow', () => {
     expect(sourceLink).toHaveAttribute('href', 'https://example.com/tech')
     expect(sourceLink).toHaveAttribute('target', '_blank')
     expect(sourceLink).toHaveAttribute('rel', 'noopener noreferrer')
+  })
+
+  function mockScrolling() {
+    const layout = { articleTop: 720 }
+    vi.stubGlobal('scrollY', 600)
+    vi.spyOn(window, 'scrollTo').mockImplementation(({ top }) => { vi.stubGlobal('scrollY', top) })
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function () {
+      return new DOMRect(0, this.dataset.articleId === '7' ? layout.articleTop - window.scrollY : 0, 300, 180)
+    })
+    return layout
+  }
+
+  it('restores the search and opened article offset using fresh reordered data', async () => {
+    onboarded = true
+    const layout = mockScrolling()
+    render(<MemoryRouter initialEntries={['/feed']}><App /></MemoryRouter>)
+    const input = await screen.findByRole('searchbox')
+    fireEvent.change(input, { target: { value: 'technology' } })
+    await waitFor(() => expect(fetch.mock.calls.some(([url]) => new URL(url).searchParams.get('q') === 'technology')).toBe(true))
+    const story = await screen.findByRole('link', { name: /Open summary/ })
+    vi.stubGlobal('scrollY', 600)
+    fireEvent.click(story)
+    await screen.findByRole('heading', { name: 'A useful technology headline' })
+    expect(window.scrollY).toBe(0)
+
+    layout.articleTop = 500
+    fireEvent.click(screen.getByRole('link', { name: /Your briefing/ }))
+    await screen.findByRole('link', { name: /Open summary/ })
+    expect(screen.getByRole('searchbox')).toHaveValue('technology')
+    expect(window.scrollTo).toHaveBeenLastCalledWith({ top: 380, left: 0, behavior: 'instant' })
+    expect(new URL(fetch.mock.calls.filter(([url]) => new URL(url).pathname === '/api/articles').at(-1)[0])
+      .searchParams.get('q')).toBe('technology')
+    expect(document.activeElement).toHaveAttribute('data-article-id', '7')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Clear search' }))
+    await waitFor(() => expect(new URL(fetch.mock.calls.filter(([url]) => new URL(url).pathname === '/api/articles')
+      .at(-1)[0]).searchParams.has('q')).toBe(false))
+    fireEvent.click(await screen.findByRole('link', { name: /Open summary/ }))
+    await screen.findByRole('heading', { name: 'A useful technology headline' })
+    fireEvent.click(screen.getByRole('link', { name: /Your briefing/ }))
+    await screen.findByRole('link', { name: /Open summary/ })
+    expect(screen.getByRole('searchbox')).toHaveValue('')
+  })
+
+  it('keeps the saved position across a failed return load and falls back when the article is gone', async () => {
+    onboarded = true
+    mockScrolling()
+    render(<MemoryRouter initialEntries={['/feed']}><App /></MemoryRouter>)
+    const story = await screen.findByRole('link', { name: /Open summary/ })
+    vi.stubGlobal('scrollY', 600)
+    fireEvent.click(story)
+    await screen.findByRole('heading', { name: 'A useful technology headline' })
+    failFeed = true
+    fireEvent.click(screen.getByRole('link', { name: /Your briefing/ }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('could not be loaded')
+    expect(window.scrollY).toBe(0)
+    failFeed = false
+    feedRows = []
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
+    await screen.findByRole('heading', { name: 'No stories yet' })
+    expect(window.scrollTo).toHaveBeenLastCalledWith({ top: 600, left: 0, behavior: 'instant' })
   })
 })

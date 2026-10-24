@@ -70,6 +70,8 @@ The system uses:
   while any visible summary is pending, and every fifteen seconds otherwise.
   Existing cards retain their order during a feed visit; a new visit, reload or
   search adopts the API's summarized-first ordering. New arrivals append below.
+  App-local view state preserves feed search and an article-relative scroll
+  position across summary navigation; full reload clears that view state.
   Cards offer Summarize for untouched stories and Retry summary for failures.
   Vitest covers component behavior
   and Playwright exercises the complete flow in local Chrome against isolated
@@ -96,6 +98,38 @@ Important invariants:
 - Keep the REST API client-agnostic for later mobile reuse.
 
 ## Current status
+
+### Preserve feed search and reading position (2026-10-24)
+
+At the user's request, returning from a summary now restores the feed's search
+and place. App keeps a small ref containing search text, opened article ID,
+viewport offset and scroll fallback. Feed initializes the actual API query from
+that saved search, fetches fresh results in summarized-first order, then restores
+the opened card to the same viewport offset when possible. Browser bounds clamp
+the scroll, and an absent article falls back to the saved scroll position.
+The original card receives focus without further scrolling. Both browser Back
+and the detail's Your briefing link work; detail navigation starts at the top.
+The app owns scroll restoration while mounted and restores the prior browser
+setting on unmount. Failed feed loads retain the position for retry.
+
+Changing/clearing search discards the previous anchor. Polling does not repeat
+restoration or alter the existing stable-order behavior. The saved view is local
+to the mounted app, not a global cache or database preference; a full reload
+clears it. No article contents are cached. This extends the plan's simple route
+navigation without changing the API, backend, schema, AI or dependencies.
+
+Verification: 21 focused App/Feed/Detail tests pass, covering preserved search,
+changed article position, focus, clear-search persistence, failed-load retry and
+missing-anchor fallback, plus prior feed/detail behavior. The final App checks
+were rerun after adding clear-search coverage (three pass). Production build
+passes (35 modules). Isolated Chrome E2E passes mobile browser Back after a
+summary changes rank, preserved filtered search and article viewport offset,
+desktop return via Your briefing, and summary opening at scroll zero alongside
+the full existing flow. Test data/model boundaries remain isolated; no live AI
+or application reset was used. Backend tests were not rerun for this frontend
+change. Test processes exited, ports 18000/15173 are closed, and existing dev
+listeners 8000/5173 remain running. The user approved committing and pushing
+this change on chunny22/frontend.
 
 ### Stable ordering during a feed visit (2026-10-23)
 
