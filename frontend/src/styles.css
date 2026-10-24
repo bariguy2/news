@@ -434,6 +434,7 @@ h1 {
   font-size: 0.85rem;
 }
 .article-progress-heading strong { color: var(--forest); }
+.article-progress-ring-value { display: none; }
 .article-progress-track {
   width: 100%;
   height: 0.6rem;
@@ -578,5 +579,55 @@ h1 {
   .onboarding-panel,
   .summary-article {
     border-radius: 1rem;
+  }
+
+  .story-list { gap: 0.65rem; }
+  .story-card {
+    padding: 1rem;
+    border-radius: 0.85rem;
+    transition: border-color 160ms ease, box-shadow 160ms ease, transform 160ms ease;
+  }
+  .story-card h2 {
+    margin: 0.65rem 0 0.8rem;
+    font-size: 1.25rem;
+    line-height: 1.22;
+    overflow-wrap: anywhere;
+  }
+  .story-card .story-meta { gap: 0.35rem 0.45rem; font-size: 0.75rem; line-height: 1.45; }
+  .story-card .summary-pending { margin-bottom: 0.5rem; font-size: 0.85rem; line-height: 1.45; }
+  .story-card .article-progress { margin: 0.65rem 0; }
+  .story-card-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; }
+  .story-card-actions .summary-button {
+    min-height: 2.75rem;
+    margin: 0;
+    padding: 0.55rem 0.85rem;
+    font-size: 0.85rem;
+  }
+  .story-original-link { display: inline-flex; align-items: center; gap: 0.3rem; min-height: 2.75rem; white-space: nowrap; }
+  .story-original-provider { display: none; }
+  .story-card-footer { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 0.5rem; }
+  .story-card-footer .story-action { font-size: 0.82rem; white-space: nowrap; }
+  .story-card .article-progress-complete { display: flex; align-items: center; gap: 0.5rem; min-width: 0; margin: 0; }
+  .story-card .article-progress-complete .article-progress-heading { min-width: 0; font-size: 0.8rem; }
+  .story-card .article-progress-complete .article-progress-heading strong { display: none; }
+  .story-card .article-progress-complete .article-progress-track {
+    display: grid;
+    place-items: center;
+    flex: 0 0 2.75rem;
+    order: -1;
+    width: 2.75rem;
+    height: 2.75rem;
+    margin: 0;
+    border: 3px solid var(--forest);
+    border-radius: 50%;
+    background: transparent;
+    color: var(--forest);
+  }
+  .story-card .article-progress-complete .article-progress-fill { display: none; }
+  .story-card .article-progress-complete .article-progress-ring-value {
+    display: inline;
+    font-size: 0.68rem;
+    font-weight: 700;
+    line-height: 1;
   }
 }

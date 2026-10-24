@@ -92,6 +92,33 @@ test('onboarding leads to a filtered feed, detail, and source link', async ({ pa
   await page.screenshot({ path: 'test-results/news-feed-pending.png', fullPage: true })
   await expect(page.getByText('Filtered world story')).not.toBeVisible()
 
+  const readyCard = page.getByRole('link', { name: 'Open summary: Browser-tested technology story' })
+  const readyProgress = readyCard.getByRole('progressbar')
+  const pendingProgress = page.getByRole('progressbar', { name: 'Summary progress for Technology story awaiting a summary' })
+  const untouchedCard = page.locator('.story-card').filter({ has: page.getByRole('heading', { name: 'Technology story you can choose' }) })
+  const desktopProgressBox = await readyProgress.boundingBox()
+  expect(desktopProgressBox.width).toBeGreaterThan(desktopProgressBox.height * 5)
+  await expect(readyCard.locator('.article-progress-ring-value')).toBeHidden()
+  for (const width of [320, 390, 430]) {
+    await page.setViewportSize({ width, height: 844 })
+    await expect(readyProgress).toHaveAttribute('aria-valuenow', '100')
+    await expect(readyCard.locator('.article-progress-ring-value')).toBeVisible()
+    const ring = await readyProgress.boundingBox()
+    expect(ring.width).toBeCloseTo(ring.height, 1)
+    await expect(readyProgress).toHaveCSS('border-radius', '50%')
+    const activeBar = await pendingProgress.boundingBox()
+    expect(activeBar.width).toBeGreaterThan(activeBar.height * 5)
+    const summarizeTarget = await untouchedCard.getByRole('button', { name: /Summarize/ }).boundingBox()
+    const originalTarget = await untouchedCard.getByRole('link', { name: /Read original/ }).boundingBox()
+    expect(summarizeTarget.height).toBeGreaterThanOrEqual(44)
+    expect(originalTarget.height).toBeGreaterThanOrEqual(44)
+    expect(Math.abs(summarizeTarget.y - originalTarget.y)).toBeLessThan(1)
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+    await page.screenshot({ path: `test-results/news-compact-feed-${width}.png`, fullPage: true })
+  }
+  await page.setViewportSize({ width: 1280, height: 720 })
+  await expect(readyCard.locator('.article-progress-ring-value')).toBeHidden()
+
   const search = page.getByRole('searchbox', { name: 'Search articles' })
   await search.fill('BROWSER-TESTED')
   await expect(page.getByRole('heading', { name: 'Technology story awaiting a summary' })).toHaveCount(0)
@@ -125,6 +152,7 @@ test('onboarding leads to a filtered feed, detail, and source link', async ({ pa
   const choice = page.getByRole('button', { name: 'Summarize: Technology story you can choose' })
   await expect(choice).toBeVisible()
   await expect(page.getByRole('link', { name: 'Open summary: Technology story you can choose' })).toHaveCount(0)
+  const browsingOrder = await page.locator('.story-list h2').allTextContents()
   await choice.click()
   // Hold one stale list response: completion must enable the card without it.
   let delayedFeedResponse = false
@@ -157,15 +185,16 @@ test('onboarding leads to a filtered feed, detail, and source link', async ({ pa
   await page.setViewportSize({ width: 390, height: 844 })
   await page.screenshot({ path: 'test-results/news-article-progress-mobile.png', fullPage: true })
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
-  await page.setViewportSize({ width: 1280, height: 720 })
   await expect(progress).toHaveAttribute('aria-valuenow', '100', { timeout: 10_000 })
   try {
     expect(delayedFeedResponse).toBe(true)
     await expect(page.getByRole('link', { name: 'Open summary: Technology story you can choose' })).toBeVisible({ timeout: 1_000 })
-    await expect(page.locator('.story-list h2').first()).toHaveText('Technology story you can choose')
+    await expect(page.locator('.story-list h2')).toHaveText(browsingOrder)
+    await expect(progress).toHaveCSS('border-radius', '50%')
   } finally {
     releaseFeedResponse?.()
   }
+  await page.setViewportSize({ width: 1280, height: 720 })
   await expect(page.getByRole('heading', { name: 'Summary processing' })).toHaveCount(0)
   await page.getByRole('link', { name: 'Open summary: Technology story you can choose' }).click()
   await expect(page.getByText('Requested facts are ready.')).toBeVisible()
@@ -175,6 +204,7 @@ test('onboarding leads to a filtered feed, detail, and source link', async ({ pa
   await expect(page.getByText('Read', { exact: true })).toBeVisible()
   await page.goto('/feed')
   await expect(page.getByRole('link', { name: 'Open summary: Technology story you can choose' })).toBeVisible()
+  await expect(page.locator('.story-list h2').first()).toHaveText('Technology story you can choose')
   await expect(page.getByRole('link', { name: 'Open summary: Technology story you can choose' }).getByText('Read', { exact: true })).toBeVisible()
   await page.screenshot({ path: 'test-results/news-feed-choice.png', fullPage: true })
 

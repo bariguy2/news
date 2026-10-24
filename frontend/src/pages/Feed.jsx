@@ -119,7 +119,18 @@ function Feed() {
           }
         })
         hasPendingArticles = resolved.length === 0 || resolved.some((article) => article.summary_status === 'pending')
-        setArticles(resolved)
+        setArticles((previous) => {
+          if (initialLoad) return resolved
+          // Refresh each card in place during this visit. A new visit or search
+          // adopts the API's summarized-first order; new arrivals append here.
+          const incoming = new Map(resolved.map((article) => [article.id, article]))
+          const retained = previous.flatMap((article) => {
+            const updated = incoming.get(article.id)
+            incoming.delete(article.id)
+            return updated ? [updated] : []
+          })
+          return [...retained, ...incoming.values()]
+        })
         setError('')
       } catch {
         if (active && initialLoad) {
@@ -165,13 +176,6 @@ function Feed() {
       if (pollTimer !== null) window.clearTimeout(pollTimer)
     }
   }, [reloadKey, query])
-
-  // Apply the same order immediately when progress reports completion,
-  // including while the next API list response is still in flight.
-  const orderedArticles = [...articles].sort((left, right) =>
-    Number(right.summary_status === 'done') - Number(left.summary_status === 'done')
-      || (right.published_at ?? '').localeCompare(left.published_at ?? '')
-      || right.id - left.id)
 
   return (
     <main className="feed-page">
@@ -230,7 +234,7 @@ function Feed() {
 
       {!loading && !error && articles.length > 0 && (
         <section className="story-list" aria-label="Headlines">
-          {orderedArticles.map((article) => article.summary_status !== 'done' ? (
+          {articles.map((article) => article.summary_status !== 'done' ? (
             <article className={`story-card story-card-pending${article.read_at ? ' story-card-read' : ''}`} key={article.id}>
               <StoryCardContent article={article} />
               <p className="summary-pending" aria-live="polite">
@@ -239,23 +243,26 @@ function Feed() {
                     : 'Would you like an AI summary?'}
               </p>
               <ArticleProgress article={article} onStatusChange={handleSummaryStatus} />
-              {article.summary_status !== 'pending' && (
-                <button
-                  type="button"
-                  className="secondary-button summary-button"
-                  disabled={Boolean(requesting[article.id])}
-                  aria-label={`${article.summary_status === 'failed' ? 'Retry summary' : 'Summarize'}: ${article.title}`}
-                  onClick={() => summarizeArticle(article)}
-                >
-                  {requesting[article.id] ? 'Requesting…' : article.summary_status === 'failed' ? 'Retry summary' : 'Summarize'}
-                </button>
-              )}
+              <div className="story-card-actions">
+                {article.summary_status !== 'pending' && (
+                  <button
+                    type="button"
+                    className="secondary-button summary-button"
+                    disabled={Boolean(requesting[article.id])}
+                    aria-label={`${article.summary_status === 'failed' ? 'Retry summary' : 'Summarize'}: ${article.title}`}
+                    onClick={() => summarizeArticle(article)}
+                  >
+                    {requesting[article.id] ? 'Requesting…' : article.summary_status === 'failed' ? 'Retry summary' : 'Summarize'}
+                  </button>
+                )}
+                <a className="story-original-link" href={article.url} target="_blank" rel="noopener noreferrer"
+                  aria-label={`Read original at ${article.source}`}
+                  onClick={() => recordRead(article)}
+                  onAuxClick={(event) => { if (event.button === 1) recordRead(article) }}>
+                  Read original<span className="story-original-provider"> at {article.source}</span> <span aria-hidden="true">↗</span>
+                </a>
+              </div>
               {requestErrors[article.id] && <p role="alert">{requestErrors[article.id]}</p>}
-              <a href={article.url} target="_blank" rel="noopener noreferrer"
-                onClick={() => recordRead(article)}
-                onAuxClick={(event) => { if (event.button === 1) recordRead(article) }}>
-                Read original at {article.source} <span aria-hidden="true">↗</span>
-              </a>
               {readErrors[article.id] && <div role="alert"><p>{readErrors[article.id]}</p>
                 <button type="button" className="secondary-button" onClick={() => recordRead(article)}>Retry saving read status</button>
               </div>}
@@ -269,8 +276,10 @@ function Feed() {
             >
               <article>
                 <StoryCardContent article={article} />
-                <ArticleProgress article={article} onStatusChange={handleSummaryStatus} />
-                <span className="story-action">Open summary <span aria-hidden="true">→</span></span>
+                <div className="story-card-footer">
+                  <ArticleProgress article={article} onStatusChange={handleSummaryStatus} />
+                  <span className="story-action">Open summary <span aria-hidden="true">→</span></span>
+                </div>
               </article>
             </Link>
           ))}

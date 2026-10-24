@@ -244,8 +244,11 @@ Startup archives existing summaries as `legacy` with unknown model attribution.
 Completed summaries appear at the top of the feed, followed by all other
 articles. Each group stays newest first by publication time, with undated
 stories last and article ID breaking ties. This ordering applies within the
-current category/search filters and before the API's result limit. Newly
-completed summaries move up immediately when progress reports completion.
+current category/search filters and before the API's result limit when opening
+the feed, reloading it or changing the search. While browsing, existing cards
+keep their relative order as progress updates; Open summary becomes available
+immediately in place, and new arrivals append below the current cards. Leaving
+and returning to the feed applies the summarized-first order again.
 
 Use **Search articles** at the top of the feed to find fetched stories in your
 selected categories. Search ignores letter case and matches a literal phrase
@@ -283,6 +286,13 @@ reading the article starts at 2%, and streamed model output advances an
 to Saving at 99%; **100% is reserved for a successful database commit**. Failed
 attempts stop below 100% and retain the Retry summary action. Untouched articles
 have no bar. Completed cards show Summary ready and 100%.
+
+On narrow screens (up to 44rem), feed cards use smaller headings and tighter
+spacing while retaining the full headline. Completed cards replace their
+horizontal bar with a circular 100% indicator beside the Open summary action.
+Active and failed summaries keep their horizontal progress bars. Summarize
+and Read original share a row when space permits, with at least 44px-high
+touch targets; the original-source name remains in the card's metadata.
 
 Estimates update every second while pending, alongside the processing stage
 and elapsed processing time.

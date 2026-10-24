@@ -41,7 +41,7 @@ export default function ArticleProgress({ article, onStatusChange }) {
   const failed = article.summary_status === 'failed' || snapshot?.stage === 'failed'
   const value = done ? 100 : Math.min(99, snapshot?.percentage ?? 0)
   const stage = done ? 'done' : failed ? 'failed' : snapshot?.stage ?? 'queued'
-  return <div className="article-progress">
+  return <div className={`article-progress${done ? ' article-progress-complete' : ''}`}>
     {error && !done ? <div role="status">
       <p>Progress unavailable. The summary may still be processing.</p>
       <button type="button" className="secondary-button" onClick={() => setRetryKey((key) => key + 1)}>Retry progress</button>
@@ -54,6 +54,7 @@ export default function ArticleProgress({ article, onStatusChange }) {
         aria-label={`Summary progress for ${article.title}`}
         aria-valuemin={0} aria-valuemax={100} aria-valuenow={value}>
         <div className="article-progress-fill" style={{ width: `${value}%` }} />
+        {done && <span className="article-progress-ring-value" aria-hidden="true">100%</span>}
       </div>
       {!done && <p className="article-progress-note">{snapshot?.elapsed_seconds ?? 0}s elapsed{!failed && ' · Progress is estimated; remaining time varies.'}</p>}
     </>}

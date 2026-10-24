@@ -209,7 +209,7 @@ describe('feed polling', () => {
     expect(screen.getByText('Read', { exact: true })).toBeVisible()
   })
 
-  it('opens a completed summary immediately before the five-second feed refresh', async () => {
+  it('enables a summary in place immediately, preserves order through polling, and sorts on return', async () => {
     const pending = { id: 40, title: 'Immediate summary', source: 'Source', category: 'Tech',
       published_at: '2026-10-22T12:00:00Z', url: 'https://example.com/immediate', summary_status: 'pending' }
     const olderDone = { ...pending, id: 39, title: 'Older ready summary', summary_status: 'done', published_at: '2026-10-21T12:00:00Z' }
@@ -219,7 +219,7 @@ describe('feed polling', () => {
       .mockImplementationOnce(() => new Promise((resolve) => { finishRefresh = resolve }))
     getArticleProgress.mockResolvedValueOnce({ stage: 'summarizing', percentage: 80 })
       .mockResolvedValue({ stage: 'done', percentage: 100 })
-    render(<MemoryRouter><Feed /></MemoryRouter>)
+    const view = render(<MemoryRouter><Feed /></MemoryRouter>)
     await act(async () => {})
     expect(screen.getAllByRole('heading', { level: 2 }).map((heading) => heading.textContent))
       .toEqual(['Older ready summary', 'New headline', 'Immediate summary'])
@@ -227,9 +227,33 @@ describe('feed polling', () => {
     await act(async () => { await vi.advanceTimersByTimeAsync(1_000) })
     expect(screen.getByRole('link', { name: 'Open summary: Immediate summary' })).toBeVisible()
     expect(screen.getAllByRole('heading', { level: 2 }).map((heading) => heading.textContent))
-      .toEqual(['Immediate summary', 'Older ready summary', 'New headline'])
+      .toEqual(['Older ready summary', 'New headline', 'Immediate summary'])
     expect(getArticles).toHaveBeenCalledTimes(2)
     await act(async () => { finishRefresh([{ ...pending, summary_status: 'done' }, olderDone, newerUntouched]) })
+    expect(screen.getAllByRole('heading', { level: 2 }).map((heading) => heading.textContent))
+      .toEqual(['Older ready summary', 'New headline', 'Immediate summary'])
+    view.unmount()
+    getArticles.mockResolvedValue([{ ...pending, summary_status: 'done' }, olderDone, newerUntouched])
+    render(<MemoryRouter><Feed /></MemoryRouter>)
+    await act(async () => {})
+    expect(screen.getAllByRole('heading', { level: 2 }).map((heading) => heading.textContent))
+      .toEqual(['Immediate summary', 'Older ready summary', 'New headline'])
+  })
+
+  it('appends new arrivals during polling and adopts fresh ordering for a new search', async () => {
+    const first = { id: 51, title: 'Existing story', source: 'Source', category: 'Tech',
+      published_at: '2026-10-22', summary_status: 'unrequested' }
+    const newest = { ...first, id: 52, title: 'New arrival', published_at: '2026-10-23' }
+    getArticles.mockReset().mockResolvedValueOnce([first]).mockResolvedValue([newest, first])
+    render(<MemoryRouter><Feed /></MemoryRouter>)
+    await act(async () => {})
+    await act(async () => { await vi.advanceTimersByTimeAsync(POPULATED_FEED_POLL_MS) })
+    expect(screen.getAllByRole('heading', { level: 2 }).map((heading) => heading.textContent))
+      .toEqual(['Existing story', 'New arrival'])
+    fireEvent.change(screen.getByRole('searchbox'), { target: { value: 'story' } })
+    await act(async () => { await vi.advanceTimersByTimeAsync(300) })
+    expect(screen.getAllByRole('heading', { level: 2 }).map((heading) => heading.textContent))
+      .toEqual(['New arrival', 'Existing story'])
   })
 
   it('keeps completion visible when an older in-flight feed poll returns pending', async () => {

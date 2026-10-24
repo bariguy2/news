@@ -68,6 +68,8 @@ The system uses:
   category-filtered headline feed, and summary detail routes. Vite reads the API
   origin from `VITE_API_BASE`; the feed polls every five seconds while empty or
   while any visible summary is pending, and every fifteen seconds otherwise.
+  Existing cards retain their order during a feed visit; a new visit, reload or
+  search adopts the API's summarized-first ordering. New arrivals append below.
   Cards offer Summarize for untouched stories and Retry summary for failures.
   Vitest covers component behavior
   and Playwright exercises the complete flow in local Chrome against isolated
@@ -94,6 +96,65 @@ Important invariants:
 - Keep the REST API client-agnostic for later mobile reuse.
 
 ## Current status
+
+### Stable ordering during a feed visit (2026-10-23)
+
+The user reported cards jumping to the top when summarization finished and
+chose to defer that reorder until leaving and returning to the feed. Done:
+Feed no longer sorts on every render. Initial loads and new searches adopt the
+API's summarized-first/newest-first order; subsequent polls merge fresh fields
+into surviving cards in their current order, appending new arrivals. Entries
+absent from the response are removed as before. Completion still immediately
+enables Open summary and the mobile 100% circle at the card's current position,
+including before a delayed list response arrives. Returning from detail or
+reloading takes the API's fresh order. This behavior applies at all widths.
+
+This supersedes the immediate promotion described in the completed-first entry
+below. It does not depend on read status, persist a stale feed cache, change the
+backend query/limit/retention, or defer summary availability. The
+compact mobile-card work is retained alongside this fix.
+
+Verification: all 18 focused Feed/ArticleProgress tests and the production build
+pass. Tests cover completion without reordering, preservation through polling,
+fresh ordering after remount/search, new arrivals, stale responses and polling
+cleanup. Isolated Chrome E2E passes, verifying stable phone-width order through
+100% completion while a list response is delayed, then summarized-first order
+after navigating to detail and returning. The ring geometry assertion tolerates
+subpixel bounding-box rounding. Backend tests were not rerun; tests use an
+isolated database and deterministic extraction/AI. Test processes exited and
+ports 18000/15173 are closed; existing dev listeners 8000/5173 remain running.
+The user approved committing and pushing this fix together with the compact
+mobile-card changes on chunny22/frontend.
+
+### Compact mobile feed cards and completion rings (2026-10-23)
+
+At the user's request, feed cards are more compact at the existing 44rem
+responsive breakpoint. Mobile cards have 1rem padding, smaller full headlines,
+tighter metadata/spacing, and a shared row for Summarize/Retry and Read original
+when space permits. These actions retain 44px minimum heights. The mobile
+source link omits the repeated provider visually while retaining its full
+accessible label and source metadata. Headlines are not truncated.
+
+Completed mobile cards show a circular 100% indicator in the footer alongside
+Summary ready and Open summary. The existing progressbar element and accessible
+0–100 values are reused; its extra visual percentage is aria-hidden. Desktop
+keeps the horizontal 100% bar. Active/failed stories keep horizontal bars on all
+widths, including current progress, elapsed time, retry and reduced-motion
+behavior. Card size changes do not animate during responsive resizing. Feed
+ordering, first-open typing, backend, database, AI and dependencies are unchanged.
+
+Verification: 17 focused Feed/ArticleProgress tests and the final production
+build pass (35 modules). Isolated Chrome E2E passes the complete existing flow
+plus 320/390/430px checks for circular completion geometry, accessible 100%,
+active horizontal bars, side-by-side 44px action targets and no page overflow.
+An initial narrow-width layout shift was corrected before the passing run.
+320px/390px and desktop screenshots were visually inspected. These are desktop
+Chrome viewport checks, not physical phone or mobile Safari verification.
+Backend tests were not rerun for this frontend-only change; no real article,
+preference or hosted AI call was used in testing. All test processes exited,
+ports 18000/15173 are closed, and existing dev listeners 8000/5173 remain.
+The user approved including this work in the stable feed-ordering commit on
+chunny22/frontend.
 
 ### Completed summaries first in the feed (2026-10-23)
 
